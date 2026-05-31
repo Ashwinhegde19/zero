@@ -1,5 +1,5 @@
 /** @jsxImportSource @opentui/solid */
-import { TextAttributes, type KeyEvent } from '@opentui/core';
+import { TextAttributes, type KeyEvent, type MouseEvent, type ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, usePaste, useTerminalDimensions } from '@opentui/solid';
 import { For, Match, Show, Switch, createMemo, createSignal, onMount } from 'solid-js';
 import packageJson from '../../package.json';
@@ -63,6 +63,8 @@ const colors = {
   bg: '#080b0d',
   surface: '#101417',
   line: '#1d252a',
+  frame: '#32424c',
+  frameActive: '#4ed1c5',
   text: '#d8dee4',
   muted: '#7d8790',
   subtle: '#53606a',
@@ -75,6 +77,9 @@ const colors = {
   success: '#80d996',
 };
 const buildVersion = packageJson.version;
+const defaultTodoRailWidth = 22;
+const minTodoRailWidth = 18;
+const maxTodoRailWidth = 65;
 
 function printable(event: KeyEvent): string | undefined {
   if (event.ctrl || event.meta || event.super) return undefined;
@@ -134,6 +139,7 @@ function commandHelp() {
     { type: 'system' as const, content: '  /provider  Manage local provider profiles' },
     { type: 'system' as const, content: '  /clear     Clear the display buffer' },
     { type: 'system' as const, content: '  /plan      Toggle plan mode styling' },
+    { type: 'system' as const, content: '  /build     Return to default build mode' },
     { type: 'system' as const, content: '  /todo      Show or hide the todo rail' },
     { type: 'system' as const, content: '  /tools     Toggle tool calling' },
     { type: 'system' as const, content: '  /debug     Show the last provider error' },
@@ -156,11 +162,13 @@ export function App(props: { onExit: () => void }) {
   const [debugMode, setDebugMode] = createSignal(false);
   const [lastError, setLastError] = createSignal<unknown>(null);
   const [toolsEnabled, setToolsEnabled] = createSignal(true);
-  const [scrollOffset, setScrollOffset] = createSignal(0);
   const [usage, setUsage] = createSignal<Usage>({ promptTokens: 0, completionTokens: 0 });
   const [plan, setPlan] = createSignal<PlanItem[]>([]);
   const [todoRailOpen, setTodoRailOpen] = createSignal(false);
   const [todoRailHidden, setTodoRailHidden] = createSignal(false);
+  const [todoRailWidth, setTodoRailWidth] = createSignal(defaultTodoRailWidth);
+  const [resizingTodoRail, setResizingTodoRail] = createSignal(false);
+  const [todoResizeHover, setTodoResizeHover] = createSignal(false);
   const [commandCursor, setCommandCursor] = createSignal(0);
   const [providerCursor, setProviderCursor] = createSignal(0);
   const [providerVersion, setProviderVersion] = createSignal(0);
@@ -188,11 +196,9 @@ export function App(props: { onExit: () => void }) {
   const rightRail = createMemo(() =>
     term().width >= 86 && (todoRailOpen() || (hasPlanItems() && hasActivePlanItems() && !todoRailHidden())),
   );
-  const transcriptHeight = createMemo(() => Math.max(6, term().height - 7));
-  const visibleMessages = createMemo(() => messages().slice(scrollOffset(), scrollOffset() + transcriptHeight()));
-  const canScrollUp = createMemo(() => scrollOffset() < Math.max(0, messages().length - 1));
-  const canScrollDown = createMemo(() => scrollOffset() > 0);
+  const mainPanelTitle = createMemo(() => (screen() === 'providers' ? 'providers' : 'add provider'));
   const providerOptions = createMemo(() => [...providers(), { name: '+ add provider' } as Pick<ProviderProfile, 'name'>]);
+  let transcriptScrollbox: ScrollBoxRenderable | undefined;
   const slashCommands = createMemo<SlashCommand[]>(() => [
     {
       name: '/provider',
@@ -211,8 +217,17 @@ export function App(props: { onExit: () => void }) {
       name: '/plan',
       detail: 'Toggle plan mode styling',
       run: () => {
-        setIsPlanMode((value) => !value);
-        append({ type: 'system', content: `Plan mode ${isPlanMode() ? 'enabled' : 'disabled'}.` });
+        const next = !isPlanMode();
+        setIsPlanMode(next);
+        append({ type: 'system', content: next ? 'Plan mode enabled.' : 'Build mode enabled.' });
+      },
+    },
+    {
+      name: '/build',
+      detail: 'Return to default build mode',
+      run: () => {
+        setIsPlanMode(false);
+        append({ type: 'system', content: 'Build mode enabled.' });
       },
     },
     {
@@ -275,7 +290,6 @@ export function App(props: { onExit: () => void }) {
 
   function append(message: ChatMessage) {
     setMessages((prev) => [...prev, message]);
-    if (scrollOffset() <= 3) setScrollOffset(0);
   }
 
   function updateLastAssistant(text: string) {
@@ -330,8 +344,25 @@ export function App(props: { onExit: () => void }) {
 
   function clearDisplay() {
     setMessages([{ type: 'system', content: 'Display cleared.' }]);
-    setScrollOffset(0);
     setCommandCursor(0);
+  }
+
+  function scrollTranscript(delta: number, unit: 'viewport' | 'content' = 'viewport') {
+    transcriptScrollbox?.scrollBy(delta, unit);
+  }
+
+  function resizeTodoRailFromMouse(event: MouseEvent) {
+    const terminalWidth = Math.max(1, term().width);
+    const nextWidth = ((terminalWidth - event.x) / terminalWidth) * 100;
+    setTodoRailWidth(Math.max(minTodoRailWidth, Math.min(maxTodoRailWidth, Math.round(nextWidth))));
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function isTodoResizeHandle(event: MouseEvent) {
+    const terminalWidth = Math.max(1, term().width);
+    const railStart = terminalWidth - Math.round((terminalWidth * todoRailWidth()) / 100);
+    return event.x <= railStart + 2;
   }
 
   function submitChat() {
@@ -393,7 +424,13 @@ export function App(props: { onExit: () => void }) {
 
   function handleSlash(command: string) {
     const cmd = command.toLowerCase();
-    const matched = slashCommands().find((item) => item.name === cmd || (cmd === '/quit' && item.name === '/exit') || (cmd === '/debug-mode false' && item.name === '/debug-mode'));
+    const matched = slashCommands().find(
+      (item) =>
+        item.name === cmd ||
+        (cmd === '/quit' && item.name === '/exit') ||
+        (cmd === '/default' && item.name === '/build') ||
+        (cmd === '/debug-mode false' && item.name === '/debug-mode'),
+    );
     if (matched) {
       matched.run();
       return;
@@ -602,22 +639,32 @@ export function App(props: { onExit: () => void }) {
     }
     if (!input()) {
       if (event.name === 'up') {
-        setScrollOffset((value) => Math.min(value + 1, Math.max(0, messages().length - 1)));
+        scrollTranscript(-1 / 5);
         event.preventDefault();
         return;
       }
       if (event.name === 'down') {
-        setScrollOffset((value) => Math.max(0, value - 1));
+        scrollTranscript(1 / 5);
         event.preventDefault();
         return;
       }
       if (event.name === 'pageup') {
-        setScrollOffset((value) => Math.min(value + 8, Math.max(0, messages().length - 1)));
+        scrollTranscript(-1 / 2);
         event.preventDefault();
         return;
       }
       if (event.name === 'pagedown') {
-        setScrollOffset((value) => Math.max(0, value - 8));
+        scrollTranscript(1 / 2);
+        event.preventDefault();
+        return;
+      }
+      if (event.name === 'home') {
+        scrollTranscript(-1, 'content');
+        event.preventDefault();
+        return;
+      }
+      if (event.name === 'end') {
+        scrollTranscript(1, 'content');
         event.preventDefault();
         return;
       }
@@ -646,14 +693,25 @@ export function App(props: { onExit: () => void }) {
       />
 
       <box width="100%" flexGrow={1} minHeight={0} flexDirection="row">
-        <box width={rightRail() ? '68%' : '100%'} flexGrow={1} flexDirection="column" paddingLeft={1} paddingRight={1}>
+        <box
+          width={rightRail() ? `${100 - todoRailWidth()}%` : '100%'}
+          flexGrow={1}
+          flexDirection="column"
+          border={rightRail() ? ['top'] : ['top', 'right']}
+          borderStyle="single"
+          borderColor={colors.frame}
+          title={screen() === 'chat' ? 'conversation' : mainPanelTitle()}
+          titleAlignment="left"
+        >
           <Switch>
             <Match when={screen() === 'chat'}>
               <Transcript
-                messages={visibleMessages()}
-                canScrollUp={canScrollUp()}
-                canScrollDown={canScrollDown()}
+                ref={(node) => {
+                  transcriptScrollbox = node;
+                }}
+                messages={messages()}
                 thinking={isThinking()}
+                rightRail={rightRail()}
               />
             </Match>
             <Match when={screen() === 'providers'}>
@@ -666,8 +724,31 @@ export function App(props: { onExit: () => void }) {
         </box>
 
         <Show when={rightRail()}>
-          <box width={1} height="100%" backgroundColor={colors.line} />
-          <TodoRail plan={plan()} />
+          <TodoRail
+            plan={plan()}
+            width={`${todoRailWidth()}%`}
+            resizing={resizingTodoRail()}
+            resizeHover={todoResizeHover()}
+            onResizeHover={(event) => setTodoResizeHover(isTodoResizeHandle(event))}
+            onResizeStart={(event) => {
+              if (!isTodoResizeHandle(event)) return;
+              setResizingTodoRail(true);
+              setTodoResizeHover(true);
+              resizeTodoRailFromMouse(event);
+            }}
+            onResize={(event) => {
+              if (!resizingTodoRail()) return;
+              resizeTodoRailFromMouse(event);
+            }}
+            onResizeEnd={(event) => {
+              if (!resizingTodoRail()) return;
+              setResizingTodoRail(false);
+              setTodoResizeHover(false);
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onResizeLeave={() => setTodoResizeHover(false)}
+          />
         </Show>
       </box>
 
@@ -696,21 +777,36 @@ export function App(props: { onExit: () => void }) {
 
 function Header(props: { version: string; provider: string; model: string; usage: Usage; total: number; mode: string }) {
   return (
-    <box width="100%" height={3} flexDirection="column" backgroundColor={colors.surface} flexShrink={0}>
-      <box width="100%" flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
-        <text fg={colors.text} attributes={TextAttributes.BOLD}>
-          zero
-          <span style={{ fg: colors.accent }}> v{props.version}</span>
-          <span style={{ fg: colors.subtle }}> / local agent</span>
+    <box
+      width="100%"
+      height={3}
+      flexDirection="row"
+      justifyContent="space-between"
+      backgroundColor={colors.surface}
+      flexShrink={0}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      <box flexDirection="column" flexShrink={1}>
+        <text fg={colors.accent} attributes={TextAttributes.BOLD} wrapMode="none" truncate>
+          ⣀⣀ ⢀⡀ ⡀⣀⢀⣀
         </text>
+        <text fg={colors.accent} attributes={TextAttributes.BOLD} wrapMode="none" truncate>
+          ⠴⠥ ⠣⠭ ⠏  ⠣⠜
+        </text>
+        <text fg={colors.subtle} wrapMode="none" truncate>
+          v{props.version} local agent
+        </text>
+      </box>
+      <box flexDirection="column" alignItems="flex-end" flexShrink={0} paddingLeft={1}>
         <text fg={colors.muted} wrapMode="none" truncate>
           {props.provider} <span style={{ fg: colors.subtle }}>/</span> <span style={{ fg: colors.magenta }}>{props.model}</span>
         </text>
-      </box>
-      <box width="100%" flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
-        <text fg={props.mode === 'plan' ? colors.accent : colors.muted}>mode {props.mode}</text>
-        <text fg={colors.subtle} wrapMode="none">
-          usage p:{props.usage.promptTokens} c:{props.usage.completionTokens} t:{props.total}
+        <text fg={props.mode === 'plan' ? colors.accent : colors.muted} wrapMode="none">
+          {props.mode === 'plan' ? 'plan mode' : 'build mode'}
+        </text>
+        <text fg={colors.subtle} wrapMode="none" truncate>
+          p:{props.usage.promptTokens} c:{props.usage.completionTokens} t:{props.total}
         </text>
       </box>
     </box>
@@ -718,28 +814,39 @@ function Header(props: { version: string; provider: string; model: string; usage
 }
 
 function Transcript(props: {
+  ref: (node: ScrollBoxRenderable) => void;
   messages: ChatMessage[];
-  canScrollUp: boolean;
-  canScrollDown: boolean;
   thinking: boolean;
+  rightRail: boolean;
 }) {
   return (
-    <box width="100%" height="100%" flexDirection="column" paddingTop={1}>
-      <Show when={props.canScrollUp || props.canScrollDown}>
-        <text fg={colors.subtle} wrapMode="none">
-          {props.canScrollUp ? 'up available' : 'top'} / {props.canScrollDown ? 'down available' : 'bottom'}
-        </text>
-      </Show>
-      <For each={props.messages}>
-        {(message) => (
-          <box width="100%" flexDirection="column" marginBottom={1}>
-            <Message message={message} />
-          </box>
-        )}
-      </For>
-      <Show when={props.thinking}>
-        <text fg={colors.muted}>thinking...</text>
-      </Show>
+    <box width="100%" height="100%" flexDirection="column">
+      <box width="100%" height={1} flexDirection="row" justifyContent="flex-end" paddingRight={props.rightRail ? 1 : 2}>
+        <text fg={colors.subtle} wrapMode="none">wheel/arrows scroll</text>
+      </box>
+      <scrollbox
+        ref={props.ref}
+        width="100%"
+        flexGrow={1}
+        minHeight={0}
+        scrollY
+        scrollX={false}
+        stickyScroll
+        stickyStart="bottom"
+        scrollbarOptions={{ showArrows: false }}
+        focused
+      >
+        <For each={props.messages}>
+          {(message) => (
+            <box width="100%" flexDirection="column" marginBottom={1}>
+              <Message message={message} />
+            </box>
+          )}
+        </For>
+        <Show when={props.thinking}>
+          <text fg={colors.cyan}>zero is thinking...</text>
+        </Show>
+      </scrollbox>
     </box>
   );
 }
@@ -748,11 +855,14 @@ function Message(props: { message: ChatMessage }) {
   return (
     <Switch>
       <Match when={props.message.type === 'user'}>
-        <text fg={colors.blue} wrapMode="word">{`> ${(props.message as any).content}`}</text>
+        <box flexDirection="row" width="100%">
+          <text fg={colors.blue} flexShrink={0}>you  </text>
+          <text fg={colors.text} wrapMode="word">{(props.message as any).content}</text>
+        </box>
       </Match>
       <Match when={props.message.type === 'assistant'}>
         <box flexDirection="row" width="100%">
-          <text fg={colors.cyan} flexShrink={0}>| </text>
+          <text fg={colors.cyan} flexShrink={0}>zero </text>
           <text fg={colors.text} wrapMode="word">
             {(props.message as any).content}
             <Show when={(props.message as any).streaming}>
@@ -785,19 +895,37 @@ function ToolCall(props: { message: Extract<ChatMessage, { type: 'tool-call' }> 
   );
 }
 
-function TodoRail(props: { plan: PlanItem[] }) {
+function TodoRail(props: {
+  plan: PlanItem[];
+  width: `${number}%`;
+  resizing: boolean;
+  resizeHover: boolean;
+  onResizeHover: (event: MouseEvent) => void;
+  onResizeStart: (event: MouseEvent) => void;
+  onResize: (event: MouseEvent) => void;
+  onResizeEnd: (event: MouseEvent) => void;
+  onResizeLeave: () => void;
+}) {
   return (
     <box
-      width="32%"
+      width={props.width}
       height="100%"
       flexDirection="column"
+      backgroundColor={props.resizing || props.resizeHover ? colors.surface : colors.bg}
+      border={['top', 'left']}
+      borderStyle="single"
+      borderColor={props.resizing || props.resizeHover ? colors.frameActive : colors.frame}
+      title={props.resizing || props.resizeHover ? '<-> todo' : 'todo'}
       paddingLeft={1}
       paddingRight={1}
       paddingTop={1}
+      onMouseMove={props.onResizeHover}
+      onMouseDown={props.onResizeStart}
+      onMouseDrag={props.onResize}
+      onMouseUp={props.onResizeEnd}
+      onMouseDragEnd={props.onResizeEnd}
+      onMouseOut={props.onResizeLeave}
     >
-      <text fg={colors.text} attributes={TextAttributes.BOLD}>todo</text>
-      <text fg={colors.subtle} wrapMode="word">updates from update_plan appear here</text>
-      <box height={1} />
       <Show
         when={props.plan.length > 0}
         fallback={<text fg={colors.muted} wrapMode="word">No active todo list yet.</text>}
@@ -823,25 +951,54 @@ function TodoRail(props: { plan: PlanItem[] }) {
 }
 
 function CommandMenu(props: { commands: SlashCommand[]; cursor: number }) {
+  const visibleLimit = 9;
+  const visibleCommands = createMemo(() => {
+    const start = Math.min(
+      Math.max(0, props.cursor - visibleLimit + 1),
+      Math.max(0, props.commands.length - visibleLimit),
+    );
+    return props.commands.slice(start, start + visibleLimit).map((command, offset) => ({
+      command,
+      index: start + offset,
+    }));
+  });
+
   return (
     <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} flexShrink={0}>
-      <box width="100%" flexDirection="column" backgroundColor={colors.surface} paddingLeft={1} paddingRight={1}>
-        <text fg={colors.subtle}>commands</text>
-        <For each={props.commands.slice(0, 5)}>
-          {(command, index) => {
-            const selected = createMemo(() => index() === props.cursor);
-            return (
-              <box width="100%" flexDirection="row" justifyContent="space-between">
-                <text fg={selected() ? colors.accent : colors.text}>
-                  {selected() ? '> ' : '  '}{command.name}
-                </text>
-                <text fg={selected() ? colors.text : colors.subtle} wrapMode="none" truncate>
-                  {command.detail}
-                </text>
-              </box>
-            );
-          }}
-        </For>
+      <box
+        width="100%"
+        flexDirection="column"
+        backgroundColor={colors.surface}
+        border
+        borderStyle="single"
+        borderColor={colors.frame}
+        title="commands"
+        paddingLeft={1}
+        paddingRight={1}
+        paddingTop={1}
+        paddingBottom={1}
+      >
+        <box width="100%" flexDirection="row" justifyContent="space-between">
+          <text fg={colors.text} attributes={TextAttributes.BOLD}>slash menu</text>
+          <text fg={colors.subtle}>enter run / esc close</text>
+        </box>
+        <Show when={props.commands.length > 0} fallback={<text fg={colors.muted}>No matching commands.</text>}>
+          <For each={visibleCommands()}>
+            {(item) => {
+              const selected = createMemo(() => item.index === props.cursor);
+              return (
+                <box width="100%" flexDirection="row" justifyContent="space-between" backgroundColor={selected() ? colors.line : colors.surface}>
+                  <text fg={selected() ? colors.accent : colors.text}>
+                    {selected() ? '> ' : '  '}{item.command.name}
+                  </text>
+                  <text fg={selected() ? colors.text : colors.subtle} wrapMode="none" truncate>
+                    {item.command.detail}
+                  </text>
+                </box>
+              );
+            }}
+          </For>
+        </Show>
       </box>
     </box>
   );
@@ -852,8 +1009,17 @@ function DebugError(props: { error: unknown }) {
 
   return (
     <box width="100%" flexDirection="column" paddingLeft={1} paddingRight={1} flexShrink={0}>
-      <box width="100%" flexDirection="column" backgroundColor={colors.surface} paddingLeft={1} paddingRight={1}>
-        <text fg={colors.error} attributes={TextAttributes.BOLD}>debug error</text>
+      <box
+        width="100%"
+        flexDirection="column"
+        backgroundColor={colors.surface}
+        border
+        borderStyle="single"
+        borderColor={colors.error}
+        title="debug error"
+        paddingLeft={1}
+        paddingRight={1}
+      >
         <text fg={colors.muted} wrapMode="word">{trimLine(message(), 240)}</text>
       </box>
     </box>
@@ -940,10 +1106,13 @@ function Composer(props: {
   const inChat = () => props.screen === 'chat';
   return (
     <box width="100%" flexDirection="column" flexShrink={0} backgroundColor={colors.bg}>
-      <box width="100%" height={1} backgroundColor={props.planMode ? colors.accent : colors.line} />
       <box
         width="100%"
         minHeight={3}
+        border={['top']}
+        borderStyle="single"
+        borderColor={props.planMode ? colors.frameActive : colors.frame}
+        title={props.planMode ? 'plan prompt' : 'prompt'}
         paddingLeft={1}
         paddingRight={1}
         flexDirection="column"
@@ -957,14 +1126,11 @@ function Composer(props: {
               <span style={{ fg: props.planMode ? colors.accent : colors.cyan }}>&gt;</span> {props.input}
               <span style={{ fg: colors.subtle }}>_</span>
             </text>
-            <text fg={colors.subtle} wrapMode="none" truncate>
-              {props.provider} / {props.model}
-            </text>
           </box>
         </Show>
       </box>
-      <box width="100%" paddingLeft={1}>
-        <text fg={colors.subtle}>/ commands - ctrl+t todo - arrows scroll - ctrl+c exit</text>
+      <box width="100%" paddingLeft={1} paddingTop={1}>
+        <text fg={colors.subtle}>/ menu - ctrl+t todo - arrows scroll - ctrl+c cancel/exit</text>
         <Show when={props.planMode}>
           <text fg={colors.accent}> - plan mode</text>
         </Show>

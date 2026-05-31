@@ -14,6 +14,7 @@ async function start() {
     gatherStats: false,
     exitOnCtrlC: false,
     useMouse: true,
+    enableMouseMovement: true,
     useKittyKeyboard: {},
     openConsoleOnError: false,
   });
