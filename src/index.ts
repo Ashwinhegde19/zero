@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import { runHeadless } from './cli';
 import { configManager } from './config/manager';
 import { startTUI } from './tui';
+import { listProviderDefinitions } from './providers/catalog';
 
 const program = new Command();
 
@@ -72,6 +73,27 @@ providersCmd
     } else {
       console.log('No active provider set.');
     }
+  });
+
+providersCmd
+  .command('catalog')
+  .description('List built-in provider and gateway catalog entries')
+  .action(() => {
+    const catalog = listProviderDefinitions();
+
+    if (catalog.length === 0) {
+      console.log('No catalog providers found.');
+      return;
+    }
+
+    console.log('\nProvider Catalog:\n');
+    catalog.forEach((provider) => {
+      console.log(`  ${provider.name} (${provider.kind})`);
+      console.log(`    ID:      ${provider.id}`);
+      console.log(`    Model:   ${provider.defaultModel}`);
+      console.log(`    BaseURL: ${provider.baseURL}`);
+      console.log('');
+    });
   });
 
 program.parse();

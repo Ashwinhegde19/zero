@@ -92,6 +92,7 @@ export class ConfigManager {
 
   // Used by the agent loop
   getEffectiveProviderConfig(): {
+    providerId?: string;
     baseURL: string;
     apiKey?: string;
     model: string;
@@ -101,6 +102,7 @@ export class ConfigManager {
     const active = this.getActiveProvider();
     if (active) {
       return {
+        providerId: active.providerId,
         baseURL: active.baseURL,
         apiKey: active.apiKey,
         model: active.model,

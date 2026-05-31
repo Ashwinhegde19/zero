@@ -8,7 +8,7 @@ import { MessageRenderer } from './MessageRenderer';
 import { ToolCallRenderer } from './ToolCallRenderer';
 import { configManager } from '../config/manager';
 import { loadProviderConfig } from '../config/provider';
-import { OpenAIProvider } from '../providers/openai';
+import { createProvider } from '../providers/factory';
 import { runAgent } from '../agent/loop';
 
 type Screen = 'chat' | 'provider-picker' | 'add-provider';
@@ -215,11 +215,7 @@ export const App: React.FC = () => {
 
       try {
         const providerConfig = await loadProviderConfig();
-        const provider = new OpenAIProvider({
-          apiKey: providerConfig.apiKey || '',
-          baseURL: providerConfig.baseURL,
-          model: providerConfig.model,
-        });
+        const provider = createProvider(providerConfig);
 
         // Add empty assistant message that we'll stream into
         setMessages((prev) => {

@@ -2,28 +2,33 @@ import React, { useState } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { configManager } from '../config/manager';
+import { listProviderDefinitions } from '../providers/catalog';
+import { discoverModelsForProvider } from '../providers/discovery';
+import { isProviderRuntimeSupported } from '../providers/factory';
+import type { ProviderDefinition, ResolvedModelDefinition } from '../providers/catalog/types';
 
-type AddMode = 'choose' | 'opengateway' | 'generic';
+type AddMode = 'choose' | 'catalog' | 'generic';
 
 interface AddProviderProps {
   onDone: (providerName?: string) => void;
   onCancel: () => void;
 }
 
+const catalogProviders = listProviderDefinitions().filter(isProviderRuntimeSupported);
+
 export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) => {
   const [mode, setMode] = useState<AddMode>('choose');
+  const [selectedOption, setSelectedOption] = useState(0);
+  const [selectedDefinition, setSelectedDefinition] = useState<ProviderDefinition | null>(null);
+  const [catalogStep, setCatalogStep] = useState(0);
 
-  // For the choose menu
-  const [selectedOption, setSelectedOption] = useState(0); // 0 = OpenGateway, 1 = Generic
+  const [catalogKey, setCatalogKey] = useState('');
+  const [catalogModel, setCatalogModel] = useState('');
+  const catalogModelTouched = React.useRef(false);
+  const [modelOptions, setModelOptions] = useState<ResolvedModelDefinition[]>([]);
+  const [selectedModelIndex, setSelectedModelIndex] = useState(0);
+  const [discoveryStatus, setDiscoveryStatus] = useState('');
 
-  // For the OpenGateway form (step based)
-  const [ogwFormStep, setOgwFormStep] = useState(0); // 0 = API Key, 1 = Model, 2 = Done
-
-  // OpenGateway fields
-  const [ogwKey, setOgwKey] = useState('');
-  const [ogwModel, setOgwModel] = useState('mimo-v2.5-pro');
-
-  // Generic fields
   const [name, setName] = useState('');
   const [baseURL, setBaseURL] = useState('https://api.openai.com/v1');
   const [apiKey, setApiKey] = useState('');
@@ -32,14 +37,69 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
 
+  const totalOptions = catalogProviders.length + 1;
+  const visibleModelStart = Math.max(
+    0,
+    Math.min(selectedModelIndex - 3, Math.max(0, modelOptions.length - 8))
+  );
+  const visibleModelOptions = modelOptions.slice(visibleModelStart, visibleModelStart + 8);
+
+  React.useEffect(() => {
+    if (mode !== 'catalog' || catalogStep !== 1 || !selectedDefinition) return;
+
+    let cancelled = false;
+
+    const loadModels = async () => {
+      const staticModels = selectedDefinition.catalog?.models ?? selectedDefinition.models ?? [];
+      setModelOptions(staticModels.map((model) => ({
+        ...model,
+        apiName: model.apiName ?? model.id,
+        providerId: selectedDefinition.id,
+        providerName: selectedDefinition.name,
+        providerKind: selectedDefinition.kind,
+      })));
+
+      if (!selectedDefinition.catalog?.discovery) {
+        setDiscoveryStatus(staticModels.length > 0 ? 'Using static catalog models.' : '');
+        return;
+      }
+
+      setDiscoveryStatus('Discovering models...');
+      const result = await discoverModelsForProvider(selectedDefinition.id, {
+        apiKey: catalogKey.trim() || undefined,
+      });
+
+      if (cancelled || !result) return;
+
+      setModelOptions(result.models);
+      setDiscoveryStatus(
+        result.error
+          ? `Discovery ${result.source}: ${result.error}`
+          : `Models loaded from ${result.source}.`
+      );
+
+      const firstModel = result.models[0];
+      if (firstModel && !catalogModelTouched.current) {
+        setCatalogModel(firstModel.apiName);
+        setSelectedModelIndex(0);
+      }
+    };
+
+    loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, catalogStep, selectedDefinition, catalogKey]);
+
   useInput((input, key) => {
     if (key.escape) {
       if (mode === 'choose') {
         onCancel();
       } else {
-        // Reset states when going back
         setMode('choose');
-        setOgwFormStep(0);
+        setCatalogStep(0);
+        setSelectedDefinition(null);
         setError('');
         setSuccess(false);
         setSelectedOption(0);
@@ -47,56 +107,88 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
       return;
     }
 
-    // Arrow key + Enter navigation for the choose menu
-    if (mode === 'choose') {
+    if (mode === 'catalog' && catalogStep === 1 && modelOptions.length > 0) {
       if (key.upArrow) {
-        setSelectedOption((prev) => Math.max(0, prev - 1));
-        return;
-      }
-      if (key.downArrow) {
-        setSelectedOption((prev) => Math.min(1, prev + 1));
-        return;
-      }
-      if (key.return) {
-        if (selectedOption === 0) {
-          setMode('opengateway');
-          setOgwFormStep(0);
-        } else {
-          setMode('generic');
-        }
+        setSelectedModelIndex((prev) => {
+          const next = Math.max(0, prev - 1);
+          catalogModelTouched.current = true;
+          setCatalogModel(modelOptions[next]?.apiName ?? catalogModel);
+          return next;
+        });
         return;
       }
 
-      // Still support numbers for convenience
-      if (input === '1') {
-        setMode('opengateway');
-        setOgwFormStep(0);
+      if (key.downArrow) {
+        setSelectedModelIndex((prev) => {
+          const next = Math.min(modelOptions.length - 1, prev + 1);
+          catalogModelTouched.current = true;
+          setCatalogModel(modelOptions[next]?.apiName ?? catalogModel);
+          return next;
+        });
+        return;
       }
-      if (input === '2') {
+    }
+
+    if (mode !== 'choose') return;
+
+    if (key.upArrow) {
+      setSelectedOption((prev) => Math.max(0, prev - 1));
+      return;
+    }
+
+    if (key.downArrow) {
+      setSelectedOption((prev) => Math.min(totalOptions - 1, prev + 1));
+      return;
+    }
+
+    const chooseOption = (index: number) => {
+      const definition = catalogProviders[index];
+      if (definition) {
+        setSelectedDefinition(definition);
+        catalogModelTouched.current = false;
+        setCatalogModel(definition.defaultModel);
+        setModelOptions([]);
+        setSelectedModelIndex(0);
+        setDiscoveryStatus('');
+        setMode('catalog');
+        setCatalogStep(definition.apiKeyRequired === false ? 1 : 0);
+      } else {
         setMode('generic');
       }
+    };
+
+    if (key.return) {
+      chooseOption(selectedOption);
+      return;
+    }
+
+    const quickNumber = parseInt(input, 10);
+    if (!isNaN(quickNumber) && quickNumber >= 1 && quickNumber <= totalOptions) {
+      chooseOption(quickNumber - 1);
     }
   });
 
-  const saveOpenGateway = () => {
-    if (!ogwKey.trim()) {
+  const saveCatalogProvider = () => {
+    if (!selectedDefinition) return;
+
+    if (selectedDefinition.apiKeyRequired !== false && !catalogKey.trim()) {
       setError('API key is required');
       return;
     }
 
-    const profileName = 'opengateway';
+    const profileName = selectedDefinition.id;
 
     configManager.addProvider({
       name: profileName,
-      baseURL: 'https://opengateway.gitlawb.com/v1',
-      apiKey: ogwKey.trim(),
-      model: ogwModel.trim(),
-      description: 'OpenGateway',
+      providerId: selectedDefinition.id,
+      kind: selectedDefinition.kind,
+      baseURL: selectedDefinition.baseURL,
+      apiKey: catalogKey.trim() || undefined,
+      model: catalogModel.trim() || selectedDefinition.defaultModel,
+      description: selectedDefinition.name,
     });
 
     setSuccess(true);
-
-    // Auto-close after a short delay so the user sees the success message
     setTimeout(() => {
       onDone(profileName);
     }, 1200);
@@ -110,6 +202,7 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
 
     configManager.addProvider({
       name: name.trim(),
+      kind: 'custom',
       baseURL: baseURL.trim(),
       apiKey: apiKey.trim() || undefined,
       model: model.trim(),
@@ -124,24 +217,30 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
     return (
       <Box flexDirection="column" padding={1}>
         <Text bold color="cyan">Add New Provider</Text>
-        <Text color="gray">Esc to go back • ↑↓ to navigate • Enter to select</Text>
+        <Text color="gray">Esc to go back - Up/Down to navigate - Enter to select</Text>
 
         <Box marginY={1} flexDirection="column">
-          <Text color={selectedOption === 0 ? 'greenBright' : 'white'}>
-            {selectedOption === 0 ? '› ' : '  '}1. Add OpenGateway (recommended)
-          </Text>
-          {selectedOption === 0 && (
-            <Text color="gray" dimColor>
-              {'   '}You'll be asked for your ogw_live_... API key
-            </Text>
-          )}
+          {catalogProviders.map((definition, index) => (
+            <Box key={definition.id} flexDirection="column" marginBottom={1}>
+              <Text color={selectedOption === index ? 'greenBright' : 'white'}>
+                {selectedOption === index ? '> ' : '  '}
+                {index + 1}. Add {definition.name}
+              </Text>
+              {selectedOption === index && (
+                <Text color="gray" dimColor>
+                  {'   '}{definition.kind}: {definition.description}
+                </Text>
+              )}
+            </Box>
+          ))}
 
-          <Text marginTop={1} color={selectedOption === 1 ? 'greenBright' : 'white'}>
-            {selectedOption === 1 ? '› ' : '  '}2. Add custom OpenAI-compatible provider
+          <Text color={selectedOption === catalogProviders.length ? 'greenBright' : 'white'}>
+            {selectedOption === catalogProviders.length ? '> ' : '  '}
+            {catalogProviders.length + 1}. Add custom OpenAI-compatible provider
           </Text>
-          {selectedOption === 1 && (
+          {selectedOption === catalogProviders.length && (
             <Text color="gray" dimColor>
-              {'   '}For Groq, OpenAI, Ollama, etc.
+              {'   '}For providers not yet described by a catalog file
             </Text>
           )}
         </Box>
@@ -149,12 +248,12 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
     );
   }
 
-  if (mode === 'opengateway') {
+  if (mode === 'catalog' && selectedDefinition) {
     if (success) {
       return (
         <Box flexDirection="column" padding={1}>
           <Text color="greenBright" bold>
-            ✓ OpenGateway provider added successfully!
+            {selectedDefinition.name} provider added successfully!
           </Text>
           <Text color="gray" dimColor>
             It is now your active provider.
@@ -165,24 +264,22 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
 
     return (
       <Box flexDirection="column" padding={1}>
-        <Text bold color="cyan">Add OpenGateway Provider</Text>
+        <Text bold color="cyan">Add {selectedDefinition.name}</Text>
         <Text color="gray">Esc to go back</Text>
 
-        {ogwFormStep === 0 && (
+        {catalogStep === 0 && (
           <Box marginTop={1} flexDirection="column">
-            <Text color="yellowBright">Step 1/2 — Enter your OpenGateway API key</Text>
-            <Text color="gray" dimColor>
-              You can get one at https://opengateway.gitlawb.com
-            </Text>
+            <Text color="yellowBright">Step 1/2 - Enter API key</Text>
             <Box marginTop={1}>
-              <Text>API Key: </Text>
+              <Text>{selectedDefinition.apiKeyLabel ?? 'API key'}: </Text>
               <TextInput
-                value={ogwKey}
-                onChange={setOgwKey}
+                value={catalogKey}
+                onChange={setCatalogKey}
                 mask="*"
-                placeholder="ogw_live_..."
+                placeholder={selectedDefinition.apiKeyPlaceholder}
               />
             </Box>
+            {error && <Text color="red">{error}</Text>}
             <Box marginTop={1}>
               <Text color="gray" dimColor>Press Enter to continue</Text>
             </Box>
@@ -190,8 +287,8 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
               value=""
               onChange={() => {}}
               onSubmit={() => {
-                if (ogwKey.trim()) {
-                  setOgwFormStep(1);
+                if (selectedDefinition.apiKeyRequired === false || catalogKey.trim()) {
+                  setCatalogStep(1);
                   setError('');
                 } else {
                   setError('API key cannot be empty');
@@ -201,21 +298,52 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
           </Box>
         )}
 
-        {ogwFormStep === 1 && (
+        {catalogStep === 1 && (
           <Box marginTop={1} flexDirection="column">
-            <Text color="yellowBright">Step 2/2 — Model name</Text>
+            <Text color="yellowBright">Step 2/2 - Model name</Text>
             <Box marginTop={1}>
               <Text>Model: </Text>
-              <TextInput value={ogwModel} onChange={setOgwModel} />
+              <TextInput
+                value={catalogModel}
+                onChange={(value) => {
+                  catalogModelTouched.current = true;
+                  setCatalogModel(value);
+                }}
+              />
             </Box>
-            {error && <Text color="red">⚠ {error}</Text>}
+            {selectedDefinition.models && selectedDefinition.models.length > 0 && (
+              <Text color="gray" dimColor>
+                Default catalog model: {selectedDefinition.defaultModel}
+              </Text>
+            )}
+            {discoveryStatus && (
+              <Text color="gray" dimColor>{discoveryStatus}</Text>
+            )}
+            {modelOptions.length > 0 && (
+              <Box marginTop={1} flexDirection="column">
+                <Text color="gray" dimColor>Up/Down to choose a catalog model</Text>
+                {visibleModelOptions.map((option, index) => {
+                  const modelIndex = visibleModelStart + index;
+                  return (
+                  <Text
+                    key={`${option.providerId ?? 'global'}:${option.apiName}`}
+                    color={modelIndex === selectedModelIndex ? 'greenBright' : 'white'}
+                  >
+                    {modelIndex === selectedModelIndex ? '> ' : '  '}
+                    {option.name ?? option.label ?? option.apiName}
+                  </Text>
+                  );
+                })}
+              </Box>
+            )}
+            {error && <Text color="red">{error}</Text>}
             <Box marginTop={1}>
               <Text color="gray" dimColor>Press Enter to save</Text>
             </Box>
             <TextInput
               value=""
               onChange={() => {}}
-              onSubmit={saveOpenGateway}
+              onSubmit={saveCatalogProvider}
             />
           </Box>
         )}
@@ -228,7 +356,7 @@ export const AddProvider: React.FC<AddProviderProps> = ({ onDone, onCancel }) =>
       return (
         <Box flexDirection="column" padding={1}>
           <Text color="greenBright" bold>
-            ✓ Provider added successfully!
+            Provider added successfully!
           </Text>
         </Box>
       );

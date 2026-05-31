@@ -5,16 +5,18 @@ interface OpenAIProviderOptions {
   apiKey: string;
   baseURL?: string;
   model: string;
+  defaultHeaders?: Record<string, string | null>;
 }
 
 export class OpenAIProvider implements Provider {
   private client: OpenAI;
   private model: string;
 
-  constructor({ apiKey, baseURL, model }: OpenAIProviderOptions) {
+  constructor({ apiKey, baseURL, model, defaultHeaders }: OpenAIProviderOptions) {
     this.client = new OpenAI({
       apiKey,
       baseURL: baseURL || 'https://api.openai.com/v1',
+      defaultHeaders,
     });
     this.model = model;
   }

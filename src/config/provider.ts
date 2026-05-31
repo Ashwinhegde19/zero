@@ -1,9 +1,22 @@
 import { configManager } from './manager';
+import { getProviderDefinition } from '../providers/catalog';
 
 export interface ProviderConfig {
+  providerId?: string;
   apiKey?: string;
   baseURL: string;
   model: string;
+}
+
+export function resolveProviderCommandConfig(parsed: any): ProviderConfig {
+  const definition = parsed.provider_id ? getProviderDefinition(parsed.provider_id) : undefined;
+
+  return {
+    providerId: parsed.provider_id,
+    apiKey: parsed.api_key,
+    baseURL: parsed.base_url || definition?.baseURL || 'https://api.openai.com/v1',
+    model: parsed.model || definition?.defaultModel || 'gpt-4o',
+  };
 }
 
 /**
@@ -20,11 +33,7 @@ export async function loadProviderConfig(): Promise<ProviderConfig> {
     const { stdout } = await Bun.$`${providerCommand}`.quiet();
     const parsed = JSON.parse(stdout.toString());
 
-    return {
-      apiKey: parsed.api_key,
-      baseURL: parsed.base_url || 'https://api.openai.com/v1',
-      model: parsed.model,
-    };
+    return resolveProviderCommandConfig(parsed);
   }
 
   // 2. Active profile from saved config

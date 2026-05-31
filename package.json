@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "test": "bun test ./tests --timeout 15000",
-    "build": "bun build src/index.ts --compile --outfile zero"
+    "build": "bun scripts/build.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -26,6 +26,7 @@
     "ink-text-input": "^6.0.0",
     "openai": "^6.39.1",
     "react": "^19.2.6",
+    "react-devtools-core": "^7.0.1",
     "shiki": "^4.1.0",
     "zod": "^4.4.3"
   }

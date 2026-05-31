@@ -5,6 +5,7 @@ node_modules
 out
 dist
 *.tgz
+/.zero-build
 
 # code coverage
 coverage
@@ -25,6 +26,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # caches
 .eslintcache
 .cache
+.zero-test-cache
 *.tsbuildinfo
 
 # IntelliJ based IDEs

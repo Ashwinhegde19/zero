@@ -1,17 +1,13 @@
 import { loadProviderConfig } from '../config/provider';
 import { configManager } from '../config/manager';
-import { OpenAIProvider } from '../providers/openai';
+import { createProvider } from '../providers/factory';
 import { runAgent } from '../agent/loop';
 
 export async function runHeadless(prompt: string) {
   const providerConfig = await loadProviderConfig();
   const activeProfile = configManager.getActiveProvider();
 
-  const provider = new OpenAIProvider({
-    apiKey: providerConfig.apiKey || '',
-    baseURL: providerConfig.baseURL,
-    model: providerConfig.model,
-  });
+  const provider = createProvider(providerConfig);
 
   const source = activeProfile 
     ? `profile: ${activeProfile.name}`
