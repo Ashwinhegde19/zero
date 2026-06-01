@@ -52,6 +52,45 @@ describe('OpenAIProvider stream options compatibility', () => {
     expect(events).toContainEqual({ type: 'text', content: 'hi' });
   });
 
+  it('does not retry unrelated unknown-parameter errors', async () => {
+    const { OpenAIProvider } = await import('../src/providers/openai');
+    const unsupportedToolChoice = Object.assign(new Error('unknown parameter: tool_choice'), {
+      status: 400,
+    });
+
+    createMock.mockRejectedValueOnce(unsupportedToolChoice);
+
+    const provider = new OpenAIProvider({ apiKey: 'test', model: 'test-model' });
+
+    await expect((async () => {
+      for await (const _event of provider.streamCompletion([{ role: 'user', content: 'hello' }], [])) {
+        // Drain the stream.
+      }
+    })()).rejects.toThrow('unknown parameter: tool_choice');
+
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('categorizes mid-stream authentication errors', async () => {
+    const { OpenAIProvider } = await import('../src/providers/openai');
+
+    createMock.mockResolvedValueOnce(streamFrom([
+      {
+        error: {
+          message: 'Incorrect API key provided',
+        },
+      },
+    ]));
+
+    const provider = new OpenAIProvider({ apiKey: 'test', model: 'test-model' });
+
+    await expect((async () => {
+      for await (const _event of provider.streamCompletion([{ role: 'user', content: 'hello' }], [])) {
+        // Drain the stream.
+      }
+    })()).rejects.toThrow('Provider authentication error');
+  });
+
   it('emits usage events from compatible OpenAI streams', async () => {
     const { OpenAIProvider } = await import('../src/providers/openai');
 

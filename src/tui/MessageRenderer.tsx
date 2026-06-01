@@ -29,6 +29,8 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({ content }) => 
 
   // Highlight code blocks asynchronously
   useEffect(() => {
+    let cancelled = false;
+
     const highlightAll = async () => {
       const newHighlights = new Map<number, string>();
 
@@ -43,12 +45,20 @@ export const MessageRenderer: React.FC<MessageRendererProps> = ({ content }) => 
         }
       }
 
-      setHighlightedBlocks(newHighlights);
+      if (!cancelled) {
+        setHighlightedBlocks(newHighlights);
+      }
     };
 
     if (matches.length > 0) {
       highlightAll();
+    } else {
+      setHighlightedBlocks(new Map());
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [content]);
 
   for (let i = 0; i < matches.length; i++) {

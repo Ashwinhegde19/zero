@@ -26,14 +26,7 @@ function isUnsupportedStreamOptionsError(error: unknown): boolean {
     candidate.error?.message,
   ].filter(Boolean).join(' ').toLowerCase();
 
-  return statusAllowsRetry && (
-    errorText.includes('stream_options') ||
-    errorText.includes('stream options') ||
-    errorText.includes('include_usage') ||
-    errorText.includes('unknown parameter') ||
-    errorText.includes('unsupported parameter') ||
-    errorText.includes('unrecognized')
-  );
+  return statusAllowsRetry && /stream[ _-]?options?/.test(errorText);
 }
 
 export class OpenAIProvider implements Provider {
@@ -193,8 +186,7 @@ export class OpenAIProvider implements Provider {
 
       yield { type: 'done' };
     } catch (error) {
-      const message = getDetailedErrorMessage(error);
-      throw new Error(`Provider returned error during streaming: ${message}`);
+      throw formatProviderCreateError(error);
     }
   }
 }
@@ -203,7 +195,7 @@ function formatProviderCreateError(error: unknown): Error {
   const message = getDetailedErrorMessage(error);
   const lower = message.toLowerCase();
 
-  if (message.includes('401') || lower.includes('invalid') || lower.includes('unauthorized')) {
+  if (message.includes('401') || lower.includes('invalid') || lower.includes('unauthorized') || lower.includes('api key')) {
     return new Error(`Provider authentication error (check your API key): ${message}`);
   }
 

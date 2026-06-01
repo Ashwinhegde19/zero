@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import { ProviderPicker } from './ProviderPicker';
 import { AddProvider } from './AddProvider';
@@ -6,6 +6,8 @@ import { Logo } from './Logo';
 import { ThinkingSpinner } from './Spinner';
 import { MessageRenderer } from './MessageRenderer';
 import { ToolCallRenderer } from './ToolCallRenderer';
+import { Header } from './Header';
+import { TodoRail } from './TodoRail';
 import { configManager } from '../config/manager';
 import { loadProviderConfig } from '../config/provider';
 import { OpenAIProvider } from '../providers/openai';
@@ -81,6 +83,7 @@ export const App: React.FC = () => {
   }, []);
   const [isThinking, setIsThinking] = useState(false);
   const [streamingMessageIndex, setStreamingMessageIndex] = useState<number | null>(null);
+  const streamingMessageIndexRef = useRef<number | null>(null);
 
   // Plan Mode (inspired by OpenClaude / Claude Code)
   const [isPlanMode, setIsPlanMode] = useState(false);
@@ -95,6 +98,8 @@ export const App: React.FC = () => {
   const [plan, setPlan] = useState<PlanItem[]>([]);
   const [todoRailOpen, setTodoRailOpen] = useState(false);
   const [todoRailHidden, setTodoRailHidden] = useState(false);
+  const planLengthRef = useRef(0);
+  const todoRailHiddenRef = useRef(false);
 
   // Command suggestions
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -133,7 +138,7 @@ export const App: React.FC = () => {
     // Don't process chat input while in provider picker or add flow
     if (!isInChat) return;
 
-    if (key.ctrl && inputChar === 't') {
+    if (!input && key.ctrl && inputChar === 't') {
       toggleTodoRail();
       return;
     }
@@ -191,7 +196,9 @@ export const App: React.FC = () => {
         // Add empty assistant message that we'll stream into
         setMessages((prev) => {
           const newMessages = [...prev, { type: 'assistant' as const, content: '' }];
-          setStreamingMessageIndex(newMessages.length - 1);
+          const nextIndex = newMessages.length - 1;
+          streamingMessageIndexRef.current = nextIndex;
+          setStreamingMessageIndex(nextIndex);
           return newMessages;
         });
 
@@ -203,7 +210,7 @@ export const App: React.FC = () => {
             setIsThinking(false);
             setMessages((prev) => {
               const newMessages = [...prev];
-              const idx = streamingMessageIndex ?? newMessages.length - 1;
+              const idx = streamingMessageIndexRef.current ?? newMessages.length - 1;
 
               if (newMessages[idx]?.type === 'assistant') {
                 const current = newMessages[idx] as { type: 'assistant'; content: string };
@@ -221,8 +228,6 @@ export const App: React.FC = () => {
               ...prev,
               { type: 'tool-call', name: tc.name, args: tc.arguments },
             ]);
-            // Reset streaming index since we inserted a message
-            setStreamingMessageIndex(null);
           },
           onToolResult: (result) => {
             // Attach result to the most recent tool call that doesn't have one yet
@@ -248,13 +253,11 @@ export const App: React.FC = () => {
             }));
           },
           onPlanUpdate: (nextPlan) => {
-            setPlan((current) => {
-              if (nextPlan.length > 0 && current.length === 0) {
-                setTodoRailHidden(false);
-                setTodoRailOpen(false);
-              }
-              return nextPlan;
-            });
+            if (nextPlan.length > 0 && planLengthRef.current === 0 && !todoRailHiddenRef.current) {
+              setTodoRailOpen(false);
+            }
+            planLengthRef.current = nextPlan.length;
+            setPlan(nextPlan);
           },
         });
       } catch (err: any) {
@@ -292,6 +295,7 @@ export const App: React.FC = () => {
         setMessages((prev) => [...prev, { type: 'system', content: friendlyMessage }]);
       } finally {
         setIsThinking(false);
+        streamingMessageIndexRef.current = null;
         setStreamingMessageIndex(null);
       }
     };
@@ -360,10 +364,10 @@ export const App: React.FC = () => {
     }
 
     if (cmd === '/todo') {
-      toggleTodoRail();
+      const nextVisibility = toggleTodoRail();
       setMessages((prev) => [
         ...prev,
-        { type: 'system', content: `Todo rail ${showTodoRail ? 'hidden' : 'shown'}.` },
+        { type: 'system', content: `Todo rail ${nextVisibility}.` },
       ]);
       return;
     }
@@ -391,14 +395,20 @@ export const App: React.FC = () => {
     setMessages((prev) => [...prev, { type: 'system', content: `Unknown command: ${command}` }]);
   };
 
-  const toggleTodoRail = () => {
+  const toggleTodoRail = (): 'shown' | 'hidden' => {
+    const nextVisibility = showTodoRail ? 'hidden' : 'shown';
+
     if (showTodoRail) {
       setTodoRailOpen(false);
+      todoRailHiddenRef.current = true;
       setTodoRailHidden(true);
     } else {
+      todoRailHiddenRef.current = false;
       setTodoRailHidden(false);
       setTodoRailOpen(true);
     }
+
+    return nextVisibility;
   };
 
   const handleProviderSelected = (name: string) => {
@@ -617,7 +627,7 @@ export const App: React.FC = () => {
       {/* Very subtle status line */}
       <Box paddingX={1} flexDirection="row">
         <Text color="gray" dimColor>
-          /help • Ctrl+T todo • Ctrl+C exit
+          /help • /todo or Ctrl+T todo • Ctrl+C exit
         </Text>
         {isPlanMode && (
           <Text color="green"> • PLAN MODE</Text>
@@ -626,89 +636,4 @@ export const App: React.FC = () => {
     </Box>
   );
 };
-
-const Header: React.FC<{
-  provider: string;
-  model: string;
-  usage: Usage;
-  totalTokens: number;
-  planMode: boolean;
-}> = ({ provider, model, usage, totalTokens, planMode }) => (
-  <Box
-    borderStyle="single"
-    borderColor={planMode ? 'green' : 'gray'}
-    paddingX={1}
-    flexDirection="row"
-    justifyContent="space-between"
-  >
-    <Box flexDirection="row">
-      <Text color="cyanBright" bold>ZERO</Text>
-      <Text color="gray" dimColor> local agent</Text>
-      {planMode && <Text color="green"> • PLAN</Text>}
-    </Box>
-    <Box flexDirection="row">
-      <Text color="cyan">{provider}</Text>
-      <Text color="gray"> / </Text>
-      <Text color="magenta">{model}</Text>
-      <Text color="gray" dimColor>
-        {' '}• p:{usage.promptTokens} c:{usage.completionTokens} t:{totalTokens}
-      </Text>
-    </Box>
-  </Box>
-);
-
-const TodoRail: React.FC<{ plan: PlanItem[] }> = ({ plan }) => (
-  <Box
-    width={34}
-    flexShrink={0}
-    flexDirection="column"
-    borderStyle="single"
-    borderColor="gray"
-    paddingX={1}
-  >
-    <Text color="green" bold>todo</Text>
-    {plan.length === 0 ? (
-      <Text color="gray" dimColor>No active plan yet.</Text>
-    ) : (
-      plan.map((item, index) => (
-        <Box key={item.id || index} flexDirection="column" marginTop={1}>
-          <Text color={planStatusColor(item.status)}>
-            {index + 1}. {planStatusMark(item.status)} {item.content}
-          </Text>
-          {item.notes && (
-            <Text color="gray" dimColor>
-              {'   '}{item.notes}
-            </Text>
-          )}
-        </Box>
-      ))
-    )}
-  </Box>
-);
-
-function planStatusMark(status: PlanItem['status']): string {
-  switch (status) {
-    case 'completed':
-      return '✓';
-    case 'in_progress':
-      return '›';
-    case 'failed':
-      return '!';
-    default:
-      return '○';
-  }
-}
-
-function planStatusColor(status: PlanItem['status']): 'green' | 'yellow' | 'red' | 'gray' {
-  switch (status) {
-    case 'completed':
-      return 'green';
-    case 'in_progress':
-      return 'yellow';
-    case 'failed':
-      return 'red';
-    default:
-      return 'gray';
-  }
-}
 

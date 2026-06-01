@@ -1,6 +1,7 @@
 import { createHighlighter } from 'shiki'
 
 let highlighterPromise: ReturnType<typeof createHighlighter> | null = null
+const highlightCache = new Map<string, Promise<string>>()
 
 export async function getHighlighter() {
   if (!highlighterPromise) {
@@ -31,6 +32,16 @@ export async function getHighlighter() {
 }
 
 export async function highlightCode(code: string, lang: string = 'text'): Promise<string> {
+  const cacheKey = `${lang}:${code.length}:${hashString(code)}`
+  const cached = highlightCache.get(cacheKey)
+  if (cached) return cached
+
+  const highlighted = highlightCodeUncached(code, lang)
+  highlightCache.set(cacheKey, highlighted)
+  return highlighted
+}
+
+async function highlightCodeUncached(code: string, lang: string): Promise<string> {
   try {
     const highlighter = await getHighlighter()
     const lines = highlighter.codeToTokensBase(code, {
@@ -49,6 +60,14 @@ export async function highlightCode(code: string, lang: string = 'text'): Promis
     // Fallback to plain text if highlighting fails
     return code
   }
+}
+
+function hashString(value: string): string {
+  let hash = 5381
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(i)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 function hexToAnsi(hex: string): string {
