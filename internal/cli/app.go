@@ -16,6 +16,7 @@ import (
 	"github.com/Gitlawb/zero/internal/sessions"
 	"github.com/Gitlawb/zero/internal/tools"
 	"github.com/Gitlawb/zero/internal/tui"
+	"github.com/Gitlawb/zero/internal/updatecheck"
 	"github.com/Gitlawb/zero/internal/verify"
 	"github.com/Gitlawb/zero/internal/worktrees"
 	"github.com/Gitlawb/zero/internal/zeroruntime"
@@ -34,6 +35,7 @@ type appDeps struct {
 	loadHooks        func(hooks.LoadOptions) (hooks.LoadResult, error)
 	newMCPStore      func() (*mcp.PermissionStore, error)
 	registerMCPTools func(context.Context, *tools.Registry, config.MCPConfig, mcp.RegisterOptions) (mcpToolRuntime, error)
+	checkUpdate      func(context.Context, updatecheck.Options) (updatecheck.Result, error)
 	prepareWorktree  func(context.Context, worktrees.Options) (worktrees.Result, error)
 	detectVerifyPlan func(string) (verify.Plan, error)
 	runVerify        func(context.Context, verify.Plan, verify.RunOptions) verify.Report
@@ -90,6 +92,7 @@ func defaultAppDeps() appDeps {
 		registerMCPTools: func(ctx context.Context, registry *tools.Registry, cfg config.MCPConfig, options mcp.RegisterOptions) (mcpToolRuntime, error) {
 			return mcp.RegisterTools(ctx, registry, cfg, options)
 		},
+		checkUpdate:      updatecheck.Check,
 		prepareWorktree:  worktrees.Prepare,
 		detectVerifyPlan: verify.DetectPlan,
 		runVerify:        verify.Run,
@@ -136,6 +139,8 @@ func runWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		return runProviders(args[1:], stdout, stderr, deps)
 	case "doctor":
 		return runDoctor(args[1:], stdout, stderr, deps)
+	case "update":
+		return runUpdate(args[1:], stdout, stderr, deps)
 	case "search", "find":
 		return runSearch(args[1:], stdout, stderr, deps)
 	case "sessions", "session":
@@ -194,6 +199,9 @@ func fillAppDeps(deps appDeps) appDeps {
 	}
 	if deps.registerMCPTools == nil {
 		deps.registerMCPTools = defaults.registerMCPTools
+	}
+	if deps.checkUpdate == nil {
+		deps.checkUpdate = defaults.checkUpdate
 	}
 	if deps.prepareWorktree == nil {
 		deps.prepareWorktree = defaults.prepareWorktree
@@ -297,6 +305,7 @@ Commands:
   models     List Zero model registry entries
   providers  Inspect resolved provider profiles
   doctor     Run backend health checks for config and provider setup
+  update     Check for Zero CLI updates
   search     Search persisted local Zero session events
   find       Alias for search
   sessions   Inspect local Zero session lineage
