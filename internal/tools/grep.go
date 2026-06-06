@@ -48,11 +48,11 @@ func NewGrepTool(workspaceRoot string) Tool {
 }
 
 func (tool grepTool) Run(_ context.Context, args map[string]any) Result {
-	pattern, err := stringArg(args, "pattern", "", true)
+	pattern, err := aliasedStringArg(args, []string{"pattern", "query", "regex", "search", "expression"}, "", true, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for grep: " + err.Error())
 	}
-	targetPath, err := stringArg(args, "path", ".", false)
+	targetPath, err := aliasedStringArg(args, []string{"path", "dir", "directory"}, ".", false, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for grep: " + err.Error())
 	}

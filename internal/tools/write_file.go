@@ -34,7 +34,7 @@ func NewWriteFileTool(workspaceRoot string) Tool {
 }
 
 func (tool writeFileTool) Run(_ context.Context, args map[string]any) Result {
-	requestedPath, err := stringArg(args, "path", "", true)
+	requestedPath, err := aliasedStringArg(args, []string{"path", "file", "file_path", "filename"}, "", true, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for write_file: " + err.Error())
 	}
@@ -84,20 +84,11 @@ func (tool writeFileTool) Run(_ context.Context, args map[string]any) Result {
 }
 
 // fileContentArg reads the file body from "content" or a common alias that weaker
-// models sometimes use instead (contents/text/body/data/file_content). A
-// present-but-non-string value is rejected (preserving the type-error contract);
-// an empty string is allowed (writing an empty file).
+// models sometimes use instead (contents/text/body/data/file_content). It
+// delegates to the shared aliasedStringArg so the present-but-non-string type
+// error ("content must be a string") and the required-but-missing error
+// ("content is required") stay consistent with every other tool. An empty string
+// is allowed (writing an empty file), so allowEmpty is true.
 func fileContentArg(args map[string]any) (string, error) {
-	for _, key := range []string{"content", "contents", "text", "body", "data", "file_content"} {
-		value, ok := args[key]
-		if !ok || value == nil {
-			continue
-		}
-		text, ok := value.(string)
-		if !ok {
-			return "", fmt.Errorf("content must be a string")
-		}
-		return text, nil
-	}
-	return "", fmt.Errorf("content is required")
+	return aliasedStringArg(args, []string{"content", "contents", "text", "body", "data", "file_content"}, "", true, true)
 }

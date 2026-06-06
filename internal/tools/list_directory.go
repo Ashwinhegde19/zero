@@ -35,7 +35,7 @@ func NewListDirectoryTool(workspaceRoot string) Tool {
 }
 
 func (tool listDirectoryTool) Run(_ context.Context, args map[string]any) Result {
-	requestedPath, err := stringArg(args, "path", ".", false)
+	requestedPath, err := aliasedStringArg(args, []string{"path", "directory", "dir"}, ".", false, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for list_directory: " + err.Error())
 	}

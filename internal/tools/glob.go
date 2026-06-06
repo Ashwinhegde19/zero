@@ -38,11 +38,11 @@ func NewGlobTool(workspaceRoot string) Tool {
 }
 
 func (tool globTool) Run(_ context.Context, args map[string]any) Result {
-	pattern, err := stringArg(args, "pattern", "", true)
+	pattern, err := aliasedStringArg(args, []string{"pattern", "glob", "match", "query", "expression"}, "", true, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for glob: " + err.Error())
 	}
-	cwd, err := stringArg(args, "cwd", ".", false)
+	cwd, err := aliasedStringArg(args, []string{"cwd", "dir", "directory", "path"}, ".", false, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for glob: " + err.Error())
 	}

@@ -35,7 +35,7 @@ func NewApplyPatchTool(workspaceRoot string) Tool {
 }
 
 func (tool applyPatchTool) Run(ctx context.Context, args map[string]any) Result {
-	patch, err := stringArg(args, "patch", "", true)
+	patch, err := aliasedStringArg(args, []string{"patch", "diff"}, "", true, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for apply_patch: " + err.Error())
 	}

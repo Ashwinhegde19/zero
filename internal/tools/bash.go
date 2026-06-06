@@ -52,7 +52,7 @@ func (tool bashTool) RunWithSandbox(ctx context.Context, args map[string]any, en
 }
 
 func (tool bashTool) run(ctx context.Context, args map[string]any, engine *zeroSandbox.Engine) Result {
-	commandText, err := stringArg(args, "command", "", true)
+	commandText, err := aliasedStringArg(args, []string{"command", "cmd", "script", "shell"}, "", true, false)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for bash: " + err.Error())
 	}

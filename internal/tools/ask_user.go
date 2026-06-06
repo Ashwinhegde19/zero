@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 )
 
@@ -139,7 +138,10 @@ func ParseAskUserQuestions(args map[string]any) ([]AskUserQuestion, error) {
 }
 
 // questionTextArg reads the question text, accepting common key variants used by
-// weaker models.
+// weaker models. It enforces a non-empty trimmed string but, unlike
+// aliasedStringArg, treats a present-but-non-string or blank value as "not
+// present" and falls through to the next alias (question text is best-effort
+// across spellings, not type-strict).
 func questionTextArg(object map[string]any) (string, error) {
 	for _, key := range []string{"question", "prompt", "text", "q", "title"} {
 		if v, ok := object[key]; ok && v != nil {
@@ -153,57 +155,10 @@ func questionTextArg(object map[string]any) (string, error) {
 
 // coerceOptionStrings turns whatever a model put in "options" into a string slice
 // without ever failing — options are presentation hints, so a malformed shape must
-// not break the whole ask_user call. Accepts []string, []any of strings/scalars/
-// objects (label/value/text/name/title), or a newline-delimited string.
+// not break the whole ask_user call. It delegates to the shared coerceStringSlice
+// so there is a single coercion path across the package.
 func coerceOptionStrings(value any) []string {
-	switch v := value.(type) {
-	case nil:
-		return nil
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s := optionToString(item); s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	case string:
-		lines := strings.Split(strings.ReplaceAll(v, "\r\n", "\n"), "\n")
-		out := make([]string, 0, len(lines))
-		for _, line := range lines {
-			if t := strings.TrimSpace(line); t != "" {
-				out = append(out, t)
-			}
-		}
-		return out
-	default:
-		if s := optionToString(value); s != "" {
-			return []string{s}
-		}
-		return nil
-	}
-}
-
-func optionToString(item any) string {
-	switch v := item.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	case bool:
-		return strconv.FormatBool(v)
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
-	case int:
-		return strconv.Itoa(v)
-	case map[string]any:
-		for _, key := range []string{"label", "value", "text", "name", "title", "option"} {
-			if s, ok := v[key].(string); ok && strings.TrimSpace(s) != "" {
-				return strings.TrimSpace(s)
-			}
-		}
-	}
-	return ""
+	return coerceStringSlice(value)
 }
 
 // FormatAskUserAnswers renders question/answer pairs into a clear, model-readable
