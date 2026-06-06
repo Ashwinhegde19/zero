@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -107,15 +108,20 @@ func ParseAskUserQuestions(args map[string]any) ([]AskUserQuestion, error) {
 
 	questions := make([]AskUserQuestion, 0, len(items))
 	for index, item := range items {
+		// Weak models sometimes send a question as a bare string instead of an
+		// object — accept that as a free-text question.
+		if text, ok := item.(string); ok {
+			if strings.TrimSpace(text) == "" {
+				return nil, fmt.Errorf("question %d must not be empty", index+1)
+			}
+			questions = append(questions, AskUserQuestion{Question: text})
+			continue
+		}
 		object, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("question %d must be an object", index+1)
+			return nil, fmt.Errorf("question %d must be an object or string", index+1)
 		}
-		text, err := stringArg(object, "question", "", true)
-		if err != nil {
-			return nil, fmt.Errorf("question %d %s", index+1, err.Error())
-		}
-		options, err := stringSliceArg(object, "options")
+		text, err := questionTextArg(object)
 		if err != nil {
 			return nil, fmt.Errorf("question %d %s", index+1, err.Error())
 		}
@@ -125,11 +131,79 @@ func ParseAskUserQuestions(args map[string]any) ([]AskUserQuestion, error) {
 		}
 		questions = append(questions, AskUserQuestion{
 			Question:    text,
-			Options:     options,
+			Options:     coerceOptionStrings(object["options"]), // best-effort; never errors
 			MultiSelect: multiSelect,
 		})
 	}
 	return questions, nil
+}
+
+// questionTextArg reads the question text, accepting common key variants used by
+// weaker models.
+func questionTextArg(object map[string]any) (string, error) {
+	for _, key := range []string{"question", "prompt", "text", "q", "title"} {
+		if v, ok := object[key]; ok && v != nil {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return s, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("question is required")
+}
+
+// coerceOptionStrings turns whatever a model put in "options" into a string slice
+// without ever failing — options are presentation hints, so a malformed shape must
+// not break the whole ask_user call. Accepts []string, []any of strings/scalars/
+// objects (label/value/text/name/title), or a newline-delimited string.
+func coerceOptionStrings(value any) []string {
+	switch v := value.(type) {
+	case nil:
+		return nil
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s := optionToString(item); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		lines := strings.Split(strings.ReplaceAll(v, "\r\n", "\n"), "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			if t := strings.TrimSpace(line); t != "" {
+				out = append(out, t)
+			}
+		}
+		return out
+	default:
+		if s := optionToString(value); s != "" {
+			return []string{s}
+		}
+		return nil
+	}
+}
+
+func optionToString(item any) string {
+	switch v := item.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case bool:
+		return strconv.FormatBool(v)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(v)
+	case map[string]any:
+		for _, key := range []string{"label", "value", "text", "name", "title", "option"} {
+			if s, ok := v[key].(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
 }
 
 // FormatAskUserAnswers renders question/answer pairs into a clear, model-readable

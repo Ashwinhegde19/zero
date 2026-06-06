@@ -38,7 +38,7 @@ func (tool writeFileTool) Run(_ context.Context, args map[string]any) Result {
 	if err != nil {
 		return errorResult("Error: Invalid arguments for write_file: " + err.Error())
 	}
-	content, err := stringArgWithEmpty(args, "content", "", true, true)
+	content, err := fileContentArg(args)
 	if err != nil {
 		return errorResult("Error: Invalid arguments for write_file: " + err.Error())
 	}
@@ -81,4 +81,23 @@ func (tool writeFileTool) Run(_ context.Context, args map[string]any) Result {
 	result.ChangedFiles = []string{relativePath}
 	result.Display = Display{Summary: summary, Kind: "file"}
 	return result
+}
+
+// fileContentArg reads the file body from "content" or a common alias that weaker
+// models sometimes use instead (contents/text/body/data/file_content). A
+// present-but-non-string value is rejected (preserving the type-error contract);
+// an empty string is allowed (writing an empty file).
+func fileContentArg(args map[string]any) (string, error) {
+	for _, key := range []string{"content", "contents", "text", "body", "data", "file_content"} {
+		value, ok := args[key]
+		if !ok || value == nil {
+			continue
+		}
+		text, ok := value.(string)
+		if !ok {
+			return "", fmt.Errorf("content must be a string")
+		}
+		return text, nil
+	}
+	return "", fmt.Errorf("content is required")
 }

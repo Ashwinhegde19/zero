@@ -442,3 +442,19 @@ func TestApplyPatchReportsChangedFiles(t *testing.T) {
 		t.Errorf("Display.Kind = %q, want diff", res.Display.Kind)
 	}
 }
+
+func TestWriteFileAcceptsContentAlias(t *testing.T) {
+	root := t.TempDir()
+	// minimax-style: content under an alias key instead of "content".
+	res := NewWriteFileTool(root).Run(context.Background(), map[string]any{
+		"path":     "shop.html",
+		"contents": "<html>hi</html>",
+	})
+	if res.Status != StatusOK {
+		t.Fatalf("alias content should write, got %s: %s", res.Status, res.Output)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, "shop.html"))
+	if string(got) != "<html>hi</html>" {
+		t.Fatalf("file content = %q", got)
+	}
+}

@@ -99,3 +99,51 @@ func TestAskUserToolIsRegisteredInReadOnlyCore(t *testing.T) {
 		t.Fatal("expected ask_user to be part of the core read-only tool set")
 	}
 }
+
+func TestParseAskUserQuestionsLenientOptions(t *testing.T) {
+	// minimax-style: options as array of objects with a label field.
+	qs, err := ParseAskUserQuestions(map[string]any{
+		"questions": []any{
+			map[string]any{"question": "Pick a style", "options": []any{
+				map[string]any{"label": "Modern"},
+				map[string]any{"value": "Classic"},
+				"Minimal",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("objects/strings options must not error: %v", err)
+	}
+	if got := qs[0].Options; len(got) != 3 || got[0] != "Modern" || got[1] != "Classic" || got[2] != "Minimal" {
+		t.Fatalf("coerced options = %v, want [Modern Classic Minimal]", got)
+	}
+
+	// options as a single newline-delimited string.
+	qs, err = ParseAskUserQuestions(map[string]any{
+		"questions": []any{map[string]any{"question": "q", "options": "A\nB"}},
+	})
+	if err != nil {
+		t.Fatalf("string options must not error: %v", err)
+	}
+	if got := qs[0].Options; len(got) != 2 || got[0] != "A" || got[1] != "B" {
+		t.Fatalf("string-split options = %v, want [A B]", got)
+	}
+
+	// no options at all = valid free-text question.
+	if _, err := ParseAskUserQuestions(map[string]any{
+		"questions": []any{map[string]any{"question": "free text?"}},
+	}); err != nil {
+		t.Fatalf("missing options must be allowed: %v", err)
+	}
+}
+
+func TestParseAskUserQuestionsStringItem(t *testing.T) {
+	// minimax-style: a question item that is a bare string, not an object.
+	qs, err := ParseAskUserQuestions(map[string]any{"questions": []any{"What is your name?"}})
+	if err != nil {
+		t.Fatalf("string question item must not error: %v", err)
+	}
+	if len(qs) != 1 || qs[0].Question != "What is your name?" {
+		t.Fatalf("bare-string question = %+v", qs)
+	}
+}
