@@ -266,3 +266,52 @@ func TestBashToolAcceptsCommandAliases(t *testing.T) {
 		}
 	}
 }
+
+func TestBoolArgCoercesModelVariants(t *testing.T) {
+	tru := []any{true, "true", "True", "yes", "on", "1", 1.0, 1}
+	for _, v := range tru {
+		if got, err := boolArg(map[string]any{"overwrite": v}, "overwrite", false); err != nil || !got {
+			t.Errorf("boolArg(%v=%T) = %v,%v; want true", v, v, got, err)
+		}
+	}
+	fal := []any{false, "false", "no", "off", "0", 0.0}
+	for _, v := range fal {
+		if got, err := boolArg(map[string]any{"overwrite": v}, "overwrite", true); err != nil || got {
+			t.Errorf("boolArg(%v=%T) = %v,%v; want false", v, v, got, err)
+		}
+	}
+	// genuinely uncoercible still errors
+	if _, err := boolArg(map[string]any{"overwrite": []any{1}}, "overwrite", false); err == nil {
+		t.Error("array should not coerce to bool")
+	}
+}
+
+func TestIntArgCoercesStringNumbers(t *testing.T) {
+	if got, err := intArg(map[string]any{"n": "5"}, "n", 0, 1, 0); err != nil || got != 5 {
+		t.Fatalf("intArg(\"5\") = %d,%v; want 5", got, err)
+	}
+	if got, err := intArg(map[string]any{"n": "7.0"}, "n", 0, 1, 0); err != nil || got != 7 {
+		t.Fatalf("intArg(\"7.0\") = %d,%v; want 7", got, err)
+	}
+	if _, err := intArg(map[string]any{"n": "abc"}, "n", 0, 1, 0); err == nil {
+		t.Error("non-numeric string should error")
+	}
+}
+
+func TestWriteFileAcceptsStringOverwrite(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "shop.html"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// minimax-style: overwrite as the string "true".
+	res := NewWriteFileTool(root).Run(context.Background(), map[string]any{
+		"path": "shop.html", "content": "new", "overwrite": "true",
+	})
+	if res.Status != StatusOK {
+		t.Fatalf("string overwrite should be accepted, got %s: %s", res.Status, res.Output)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, "shop.html"))
+	if string(got) != "new" {
+		t.Fatalf("expected overwrite to replace content, got %q", got)
+	}
+}
