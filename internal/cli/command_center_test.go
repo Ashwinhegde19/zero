@@ -127,6 +127,46 @@ func TestRunModelsListsRegistryModels(t *testing.T) {
 	}
 }
 
+func TestRunModelsRendersAlignedTable(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithDeps([]string{"models", "list", "--provider", "anthropic"}, &stdout, &stderr, commandCenterDeps(t))
+
+	if exitCode != exitSuccess {
+		t.Fatalf("expected exit code %d, got %d: %s", exitSuccess, exitCode, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{"ID", "PROVIDER", "STATUS", "CONTEXT", "REASONING", "$IN/1M", "$OUT/1M"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected models table header %q, got:\n%s", want, output)
+		}
+	}
+	// Row content: canonical id, provider, formatted context window, and rates.
+	for _, want := range []string{"claude-sonnet-4.5", "anthropic", "200,000", "3.00", "15.00"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected models table to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunModelsJSONUnchangedIncludesRates(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := runWithDeps([]string{"models", "list", "--provider", "anthropic", "--json"}, &stdout, &stderr, commandCenterDeps(t))
+
+	if exitCode != exitSuccess {
+		t.Fatalf("expected exit code %d, got %d: %s", exitSuccess, exitCode, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{`"models"`, `"id": "claude-sonnet-4.5"`, `"inputPerMillion": 3`, `"outputPerMillion": 15`} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected models JSON to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
 func TestRunModelsRejectsUnknownProvider(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

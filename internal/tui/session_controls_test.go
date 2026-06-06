@@ -310,8 +310,65 @@ func TestModelSwitchClearsUnsupportedEffortPreference(t *testing.T) {
 	if next.reasoningEffort != "" {
 		t.Fatalf("expected unsupported effort preference to reset, got %q", next.reasoningEffort)
 	}
-	if !transcriptContains(next.transcript, "unsupported preference reset") {
+	if !transcriptContains(next.transcript, "effort: auto (unsupported preference reset)") {
 		t.Fatalf("expected model switch transcript to mention effort reset, got %#v", next.transcript)
+	}
+}
+
+func TestModelSwitchRedirectsDeprecatedModelWithNotice(t *testing.T) {
+	nextProvider := &fakeProvider{}
+	m := newModel(context.Background(), Options{
+		ProviderName:    "openai",
+		ModelName:       "gpt-4.1",
+		Provider:        &fakeProvider{},
+		ProviderProfile: openAITestProfile("gpt-4.1"),
+		NewProvider: func(profile config.ProviderProfile) (zeroruntime.Provider, error) {
+			if profile.Model != "gpt-4.1" {
+				t.Fatalf("expected deprecated model to redirect to gpt-4.1, got %#v", profile)
+			}
+			return nextProvider, nil
+		},
+	})
+	m.input.SetValue("/model gpt-4-turbo")
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := updated.(model)
+
+	if cmd != nil {
+		t.Fatal("expected /model to be handled without starting an agent run")
+	}
+	if next.modelName != "gpt-4.1" {
+		t.Fatalf("expected active model to be gpt-4.1 after redirect, got %q", next.modelName)
+	}
+	if !transcriptContains(next.transcript, "deprecated") {
+		t.Fatalf("expected deprecation notice in transcript, got %#v", next.transcript)
+	}
+	if !transcriptContains(next.transcript, "model: gpt-4.1") {
+		t.Fatalf("expected switch to canonical fallback id, got %#v", next.transcript)
+	}
+}
+
+func TestModelSwitchUnknownModelReportsError(t *testing.T) {
+	m := newModel(context.Background(), Options{
+		ProviderName:    "openai",
+		ModelName:       "gpt-4.1",
+		Provider:        &fakeProvider{},
+		ProviderProfile: openAITestProfile("gpt-4.1"),
+		NewProvider: func(profile config.ProviderProfile) (zeroruntime.Provider, error) {
+			t.Fatal("provider should not be rebuilt for an unknown model")
+			return nil, nil
+		},
+	})
+	m.input.SetValue("/model totally-unknown-model")
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next := updated.(model)
+
+	if next.modelName != "gpt-4.1" {
+		t.Fatalf("expected active model to stay gpt-4.1, got %q", next.modelName)
+	}
+	if !transcriptContains(next.transcript, "unknown Zero model") {
+		t.Fatalf("expected unknown model error, got %#v", next.transcript)
 	}
 }
 

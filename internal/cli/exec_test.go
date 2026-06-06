@@ -394,6 +394,73 @@ func TestRunExecJSONOutputsNDJSONEvents(t *testing.T) {
 	}
 }
 
+func TestRunExecResolvesCanonicalModelAlias(t *testing.T) {
+	root := t.TempDir()
+
+	// "openai:gpt-4.1" is a registry alias for the canonical gpt-4.1 id; the
+	// selection boundary should normalize it before the provider sees it.
+	exitCode, stdout, stderr := runExecWithEcho(t, []string{"exec", "--cwd", root, "-m", "openai:gpt-4.1", "-o", "json", "hi"})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", exitCode, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("expected empty stderr for active model, got %q", stderr)
+	}
+	events := decodeJSONLines(t, stdout)
+	if got := events[0]["model"]; got != "gpt-4.1" {
+		t.Fatalf("expected alias to resolve to gpt-4.1, got %v", got)
+	}
+}
+
+func TestRunExecRedirectsDeprecatedModelWithNotice(t *testing.T) {
+	root := t.TempDir()
+
+	exitCode, stdout, stderr := runExecWithEcho(t, []string{"exec", "--cwd", root, "-m", "gpt-4-turbo", "-o", "json", "hi"})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", exitCode, stderr)
+	}
+	if !strings.Contains(stderr, "deprecated") || !strings.Contains(stderr, "gpt-4.1") {
+		t.Fatalf("expected deprecation notice on stderr, got %q", stderr)
+	}
+	events := decodeJSONLines(t, stdout)
+	if got := events[0]["model"]; got != "gpt-4.1" {
+		t.Fatalf("expected deprecated model to redirect to gpt-4.1, got %v", got)
+	}
+}
+
+func TestRunExecReasoningEffortNoticeForNonReasoningModel(t *testing.T) {
+	root := t.TempDir()
+
+	exitCode, stdout, stderr := runExecWithEcho(t, []string{"exec", "--cwd", root, "-m", "gpt-4.1", "-r", "high", "-o", "json", "hi"})
+
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d: %s", exitCode, stderr)
+	}
+	if !strings.Contains(stderr, "does not support reasoning effort") {
+		t.Fatalf("expected non-reasoning effort notice on stderr, got %q", stderr)
+	}
+	if stdout == "" {
+		t.Fatal("expected run output on stdout")
+	}
+}
+
+func TestReasoningEffortNoticeCoercesUnsupportedEffort(t *testing.T) {
+	// claude-sonnet-4.5 supports low/medium/high with a medium default; xhigh is
+	// unsupported and should be coerced to the model default.
+	notice := reasoningEffortNotice("claude-sonnet-4.5", "xhigh")
+	if !strings.Contains(notice, "not supported") || !strings.Contains(notice, "medium") {
+		t.Fatalf("expected coercion notice to default medium, got %q", notice)
+	}
+	if got := reasoningEffortNotice("claude-sonnet-4.5", "high"); got != "" {
+		t.Fatalf("expected no notice for a supported effort, got %q", got)
+	}
+	if got := reasoningEffortNotice("gpt-4.1", "high"); !strings.Contains(got, "does not support") {
+		t.Fatalf("expected unsupported-model notice, got %q", got)
+	}
+}
+
 func TestRunExecJSONUnsafeOutputsWarningEvent(t *testing.T) {
 	exitCode, stdout, stderr := runExecWithEcho(t, []string{"exec", "--skip-permissions-unsafe", "-o", "json", "hello"})
 

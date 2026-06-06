@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Gitlawb/zero/internal/config"
@@ -111,9 +112,9 @@ func (m model) handleModelCommand(args string) (model, string) {
 	if err != nil {
 		return m, "Model\nFailed to load model catalog: " + err.Error()
 	}
-	entry, err := registry.Require(args)
-	if err != nil {
-		return m, "Model\n" + err.Error()
+	entry, notice, ok := registry.ResolveWithFallback(args)
+	if !ok {
+		return m, "Model\nunknown Zero model " + strconv.Quote(args)
 	}
 	if m.providerProfile == (config.ProviderProfile{}) {
 		return m, "Model\nNo provider profile is available for TUI model switching."
@@ -138,19 +139,33 @@ func (m model) handleModelCommand(args string) (model, string) {
 	m.provider = nextProvider
 	m.providerName = displayValue(nextProfile.Name, string(metadata.ProviderKind))
 	m.modelName = entry.ID
-	effortLine := "effort: " + m.effortDisplay()
-	if m.reasoningEffort != "" && !reasoningEffortAllowed(registry.ReasoningEfforts(entry.ID), m.reasoningEffort) {
+	resetEffort := false
+	if m.reasoningEffort != "" && !reasoningEffortAllowed(entry.ReasoningEfforts, m.reasoningEffort) {
+		// Drop an unsupported carry-over preference and fall back to the
+		// model's effective default for the new model.
 		m.reasoningEffort = ""
-		effortLine = "effort: auto (unsupported preference reset)"
+		resetEffort = true
 	}
-	return m, strings.Join([]string{
-		"Model",
+	effortLine := "effort: " + m.effortDisplay()
+	if resetEffort {
+		// Preference was dropped: show "auto" (model default applies), not a
+		// concrete value that would read as an explicit setting.
+		effortLine += " (unsupported preference reset)"
+	} else if effective := modelregistry.EffectiveReasoningEffort(entry, m.reasoningEffort); effective != modelregistry.ReasoningEffortNone {
+		effortLine = "effort: " + string(effective)
+	}
+	lines := []string{"Model"}
+	if notice != "" {
+		lines = append(lines, notice)
+	}
+	lines = append(lines,
 		"Switched model for this TUI session.",
-		"model: " + entry.ID,
-		"provider: " + string(metadata.ProviderKind),
-		"api model: " + metadata.APIModel,
+		"model: "+entry.ID,
+		"provider: "+string(metadata.ProviderKind),
+		"api model: "+metadata.APIModel,
 		effortLine,
-	}, "\n")
+	)
+	return m, strings.Join(lines, "\n")
 }
 
 func apiKeyState(set bool) string {

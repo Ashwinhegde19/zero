@@ -2,6 +2,7 @@ package modelregistry
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -83,11 +84,37 @@ type ModelEntry struct {
 	APIProviders     []ProviderKind
 	ContextLimits    ContextLimits
 	ReasoningEfforts []ReasoningEffort
-	Capabilities     ModelCapabilities
-	Cost             ModelCost
-	Status           ModelStatus
-	Aliases          []string
-	Description      string
+	// DefaultReasoningEffort is the effort used when the caller does not specify
+	// one (must be a member of ReasoningEfforts, or empty for non-reasoning models).
+	DefaultReasoningEffort ReasoningEffort
+	Capabilities           ModelCapabilities
+	Cost                   ModelCost
+	Status                 ModelStatus
+	Aliases                []string
+	// MatchPatterns are regular expressions that resolve fuzzy user input to this
+	// model (e.g. `sonnet[^a-z0-9]*4[.\s]?5` -> the canonical id).
+	MatchPatterns []string
+	// Deprecation, when set, redirects this model to a replacement.
+	Deprecation *DeprecationRule
+	Description string
+}
+
+// DeprecationRule describes how a deprecated model is phased out and what to use
+// instead. FallbackID is required; the date/warning fields are advisory.
+type DeprecationRule struct {
+	FallbackID string // model id to redirect to
+	SoftDate   string // ISO-8601: warn but keep working from this date
+	HardDate   string // ISO-8601: treat as fully retired from this date
+	WarningMsg string // user-facing notice
+}
+
+// Clone returns a deep copy of the rule (or nil).
+func (rule *DeprecationRule) Clone() *DeprecationRule {
+	if rule == nil {
+		return nil
+	}
+	copied := *rule
+	return &copied
 }
 
 func (model ModelEntry) Validate() error {
@@ -124,6 +151,12 @@ func (model ModelEntry) Validate() error {
 		if !ValidReasoningEffort(effort) {
 			return fmt.Errorf("unknown reasoning effort %q", effort)
 		}
+	}
+	if model.DefaultReasoningEffort != "" && !ValidReasoningEffort(model.DefaultReasoningEffort) {
+		return fmt.Errorf("unknown default reasoning effort %q", model.DefaultReasoningEffort)
+	}
+	if model.Deprecation != nil && strings.TrimSpace(model.Deprecation.FallbackID) == "" {
+		return fmt.Errorf("deprecation rule requires a fallback id")
 	}
 	if err := model.Cost.Validate(); err != nil {
 		return err
@@ -231,8 +264,14 @@ func (model ModelEntry) AllowsProvider(provider ProviderKind) bool {
 }
 
 type Registry struct {
-	entries map[string]ModelEntry
-	models  []ModelEntry
+	entries  map[string]ModelEntry
+	models   []ModelEntry
+	patterns []compiledMatch
+}
+
+type compiledMatch struct {
+	re      *regexp.Regexp
+	modelID string
 }
 
 func NewRegistry(entries []ModelEntry) (Registry, error) {
@@ -264,6 +303,13 @@ func NewRegistry(entries []ModelEntry) (Registry, error) {
 			if err := registry.register(alias, clonedEntry); err != nil {
 				return Registry{}, err
 			}
+		}
+		for _, pattern := range entry.MatchPatterns {
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				return Registry{}, fmt.Errorf("invalid match pattern %q for model %q: %w", pattern, entry.ID, err)
+			}
+			registry.patterns = append(registry.patterns, compiledMatch{re: re, modelID: clonedEntry.ID})
 		}
 		registry.models = append(registry.models, clonedEntry)
 	}

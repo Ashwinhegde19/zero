@@ -11,6 +11,7 @@ import (
 
 	"github.com/Gitlawb/zero/internal/agent"
 	"github.com/Gitlawb/zero/internal/config"
+	"github.com/Gitlawb/zero/internal/modelregistry"
 	"github.com/Gitlawb/zero/internal/providers"
 	"github.com/Gitlawb/zero/internal/sandbox"
 	"github.com/Gitlawb/zero/internal/sessions"
@@ -133,7 +134,16 @@ func runExec(args []string, stdout io.Writer, stderr io.Writer, deps appDeps) in
 
 	overrides := config.Overrides{}
 	if options.model != "" {
-		overrides.Provider.Model = options.model
+		resolvedModel, notice := resolveSelectedModel(options.model)
+		overrides.Provider.Model = resolvedModel
+		if notice != "" {
+			fmt.Fprintln(stderr, notice)
+		}
+	}
+	if options.reasoningEffort != "" {
+		if notice := reasoningEffortNotice(overrides.Provider.Model, options.reasoningEffort); notice != "" {
+			fmt.Fprintln(stderr, notice)
+		}
 	}
 	if options.maxTurns > 0 {
 		overrides.MaxTurns = options.maxTurns
@@ -412,6 +422,60 @@ func writeExecProviderError(stdout io.Writer, stderr io.Writer, format execOutpu
 		return exitCrash
 	}
 	return exitProvider
+}
+
+// resolveSelectedModel routes a user-supplied --model value through the model
+// registry so that fuzzy aliases (e.g. "sonnet 4.5") resolve to canonical ids
+// and deprecated models auto-redirect to their fallback. It returns the model id
+// to use plus a non-empty notice when a deprecation redirect or warning applies.
+// Inputs that the registry does not recognize (e.g. custom openai-compatible
+// model names) are returned unchanged so provider passthrough still works.
+func resolveSelectedModel(input string) (string, string) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return input, ""
+	}
+	registry, err := modelregistry.DefaultRegistry()
+	if err != nil {
+		return input, ""
+	}
+	entry, notice, ok := registry.ResolveWithFallback(trimmed)
+	if !ok {
+		return input, ""
+	}
+	return entry.ID, notice
+}
+
+// reasoningEffortNotice resolves the requested --reasoning-effort against the
+// selected model's supported efforts via EffectiveReasoningEffort and returns a
+// short advisory when the requested value is unsupported (and was coerced to the
+// model default).
+//
+// NOTE: the effective effort is not yet forwarded to the provider request — the
+// zeroruntime.CompletionRequest / provider wire schemas carry no effort field.
+// Full provider-request propagation is deferred (see slice-3 report).
+func reasoningEffortNotice(modelID string, requested string) string {
+	trimmed := strings.TrimSpace(modelID)
+	if trimmed == "" {
+		return ""
+	}
+	registry, err := modelregistry.DefaultRegistry()
+	if err != nil {
+		return ""
+	}
+	entry, ok := registry.Get(trimmed)
+	if !ok {
+		return ""
+	}
+	want := modelregistry.ReasoningEffort(strings.TrimSpace(strings.ToLower(requested)))
+	effective := modelregistry.EffectiveReasoningEffort(entry, want)
+	if effective == modelregistry.ReasoningEffortNone {
+		return fmt.Sprintf("%s does not support reasoning effort; ignoring --reasoning-effort %s", entry.ID, requested)
+	}
+	if want != "" && effective != want {
+		return fmt.Sprintf("reasoning effort %q is not supported by %s; using %s instead", requested, entry.ID, effective)
+	}
+	return ""
 }
 
 func resolveExecRunMetadata(profile config.ProviderProfile) (execRunMetadata, error) {

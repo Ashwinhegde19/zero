@@ -5,6 +5,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/Gitlawb/zero/internal/config"
 	"github.com/Gitlawb/zero/internal/modelregistry"
@@ -277,15 +278,55 @@ func formatProviderLine(provider providerSummary) string {
 }
 
 func formatModelSummaries(models []modelSummary) string {
-	lines := []string{"Models"}
 	if len(models) == 0 {
-		lines = append(lines, "  (none)")
-		return strings.Join(lines, "\n")
+		return "Models\n  (none)"
 	}
+	var builder strings.Builder
+	builder.WriteString("Models\n")
+	writer := tabwriter.NewWriter(&builder, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(writer, "ID\tPROVIDER\tSTATUS\tCONTEXT\tREASONING\t$IN/1M\t$OUT/1M")
 	for _, model := range models {
-		lines = append(lines, fmt.Sprintf("  %s [%s] ctx=%d out=%d - %s", model.ID, model.Provider, model.ContextWindow, model.MaxOutputTokens, model.DisplayName))
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			model.ID,
+			model.Provider,
+			model.Status,
+			formatTokenCount(model.ContextWindow),
+			formatReasoningEfforts(model.ReasoningEfforts),
+			formatRate(model.InputPerMillion),
+			formatRate(model.OutputPerMillion),
+		)
 	}
-	return strings.Join(lines, "\n")
+	writer.Flush()
+	return strings.TrimRight(builder.String(), "\n")
+}
+
+func formatReasoningEfforts(efforts []string) string {
+	if len(efforts) == 0 {
+		return "-"
+	}
+	return strings.Join(efforts, "/")
+}
+
+func formatRate(rate float64) string {
+	if rate <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.2f", rate)
+}
+
+func formatTokenCount(value int) string {
+	if value <= 0 {
+		return "-"
+	}
+	digits := fmt.Sprintf("%d", value)
+	var grouped strings.Builder
+	for index, char := range digits {
+		if index > 0 && (len(digits)-index)%3 == 0 {
+			grouped.WriteByte(',')
+		}
+		grouped.WriteRune(char)
+	}
+	return grouped.String()
 }
 
 func apiKeyState(set bool) string {

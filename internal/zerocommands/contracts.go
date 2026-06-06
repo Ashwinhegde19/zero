@@ -67,7 +67,11 @@ type ModelSnapshot struct {
 	MaxOutputTokens  int      `json:"maxOutputTokens"`
 	Capabilities     []string `json:"capabilities"`
 	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
-	Description      string   `json:"description,omitempty"`
+	// InputPerMillion / OutputPerMillion are representative USD rates per 1M
+	// tokens. For tiered models the first (smallest-window) tier is reported.
+	InputPerMillion  float64 `json:"inputPerMillion,omitempty"`
+	OutputPerMillion float64 `json:"outputPerMillion,omitempty"`
+	Description      string  `json:"description,omitempty"`
 }
 
 type SessionSnapshot struct {
@@ -190,6 +194,7 @@ func ModelSnapshotFromEntry(model modelregistry.ModelEntry) ModelSnapshot {
 	for _, effort := range model.ReasoningEfforts {
 		efforts = append(efforts, string(effort))
 	}
+	inputRate, outputRate := representativeRates(model.Cost)
 	return ModelSnapshot{
 		ID:               model.ID,
 		DisplayName:      model.DisplayName,
@@ -200,8 +205,22 @@ func ModelSnapshotFromEntry(model modelregistry.ModelEntry) ModelSnapshot {
 		MaxOutputTokens:  model.ContextLimits.MaxOutputTokens,
 		Capabilities:     capabilities,
 		ReasoningEfforts: efforts,
+		InputPerMillion:  inputRate,
+		OutputPerMillion: outputRate,
 		Description:      model.Description,
 	}
+}
+
+// representativeRates returns the base per-million input/output USD rates, or
+// the first tier's rates for tiered-pricing models that omit base rates.
+func representativeRates(cost modelregistry.ModelCost) (float64, float64) {
+	if cost.InputPerMillion > 0 || cost.OutputPerMillion > 0 {
+		return cost.InputPerMillion, cost.OutputPerMillion
+	}
+	if len(cost.Tiers) > 0 {
+		return cost.Tiers[0].InputPerMillion, cost.Tiers[0].OutputPerMillion
+	}
+	return 0, 0
 }
 
 func SessionSnapshots(items []sessions.Metadata) []SessionSnapshot {
