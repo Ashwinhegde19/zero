@@ -40,3 +40,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # local launcher with API key — never commit
 start-zenline.sh
+
+# user test artifact — never commit
+shop.html
