@@ -52,6 +52,72 @@ func newDeferredFixtureRegistry() *Registry {
 	return reg
 }
 
+func TestToolSearchExposesExpectedSafetyAndSchema(t *testing.T) {
+	tool := NewToolSearchTool(NewRegistry())
+
+	if tool.Name() != "tool_search" {
+		t.Fatalf("name = %q, want tool_search", tool.Name())
+	}
+	if tool.Description() == "" {
+		t.Fatal("tool_search must have a description")
+	}
+
+	safety := tool.Safety()
+	if safety.SideEffect != SideEffectNone {
+		t.Fatalf("side effect = %s, want none", safety.SideEffect)
+	}
+	if safety.Permission != PermissionAllow {
+		t.Fatalf("permission = %s, want allow", safety.Permission)
+	}
+	if !safety.AdvertiseInAuto {
+		t.Fatal("tool_search must be AdvertiseInAuto")
+	}
+
+	schema := tool.Parameters()
+	if schema.Type != "object" || schema.AdditionalProperties {
+		t.Fatalf("unexpected schema header: %#v", schema)
+	}
+	queryProp, ok := schema.Properties["query"]
+	if !ok {
+		t.Fatal("schema missing query property")
+	}
+	if queryProp.Type != "string" {
+		t.Fatalf("query type = %s, want string", queryProp.Type)
+	}
+	if len(schema.Required) != 1 || schema.Required[0] != "query" {
+		t.Fatalf("required = %#v, want [query]", schema.Required)
+	}
+}
+
+// tool_search must run through the registry's optionsAwareTool dispatch and be
+// allowed without a permission grant (SideEffectNone + PermissionAllow).
+func TestToolSearchRunsThroughRegistryWithoutPermission(t *testing.T) {
+	reg := newDeferredFixtureRegistry()
+	reg.Register(NewToolSearchTool(reg))
+
+	result := reg.Run(context.Background(), "tool_search", map[string]any{
+		"query": "select:weather_lookup",
+	})
+
+	if result.Status != StatusOK {
+		t.Fatalf("status = %s, want ok; output=%q", result.Status, result.Output)
+	}
+	if result.Meta["load_tools"] != "weather_lookup" {
+		t.Fatalf("Meta[load_tools] = %q, want weather_lookup", result.Meta["load_tools"])
+	}
+}
+
+func TestToolSearchMissingQueryArgIsError(t *testing.T) {
+	tool := NewToolSearchTool(NewRegistry()).(optionsAwareTool)
+	result := tool.RunWithOptions(context.Background(), map[string]any{}, RunOptions{})
+	if result.Status != StatusError {
+		t.Fatalf("status = %s, want error for missing query", result.Status)
+	}
+	if !strings.Contains(result.Output, "query is required") {
+		t.Fatalf("unexpected error output: %q", result.Output)
+	}
+}
+
 func TestToolSearchUnknownQueryReturnsNoMeta(t *testing.T) {
 	reg := newDeferredFixtureRegistry()
 	tool := NewToolSearchTool(reg).(optionsAwareTool)

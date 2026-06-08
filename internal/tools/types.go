@@ -11,6 +11,9 @@ type Permission string
 type Status string
 
 const (
+	// SideEffectNone marks tools that neither read nor mutate state (e.g.
+	// tool_search, which only reports already-registered tool schemas).
+	SideEffectNone           SideEffect = "none"
 	SideEffectRead           SideEffect = "read"
 	SideEffectWrite          SideEffect = "write"
 	SideEffectShell          SideEffect = "shell"
