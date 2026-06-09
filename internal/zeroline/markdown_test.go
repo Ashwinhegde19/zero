@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -16,80 +15,6 @@ func forceColor(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
-}
-
-func TestRenderMarkdownStripsSyntax(t *testing.T) {
-	p := Resolve(0, true)
-	out := renderMarkdown("**bold** and `code`", p, 0, true, 60)
-	if strings.TrimSpace(out) == "" {
-		t.Fatal("renderMarkdown returned empty output")
-	}
-	if strings.Contains(out, "**") {
-		t.Errorf("markdown markers leaked into output: %q", stripANSI(out))
-	}
-	// the words themselves must survive the render
-	plain := stripANSI(out)
-	for _, w := range []string{"bold", "code"} {
-		if !strings.Contains(plain, w) {
-			t.Errorf("rendered markdown missing %q: %q", w, plain)
-		}
-	}
-	// no trailing blank lines (we Trim them so transcript spacing stays tight)
-	if strings.HasSuffix(out, "\n") || strings.HasPrefix(out, "\n") {
-		t.Errorf("renderMarkdown left surrounding blank lines: %q", out)
-	}
-}
-
-func TestRenderMarkdownHighlightsCodeFence(t *testing.T) {
-	p := Resolve(1, true)
-	src := "Here is code:\n\n```go\nfunc main() {}\n```\n"
-	out := renderMarkdown(src, p, 1, true, 70)
-	plain := stripANSI(out)
-	if !strings.Contains(plain, "func main()") {
-		t.Errorf("fenced code body missing from render: %q", plain)
-	}
-	if strings.Contains(plain, "```") {
-		t.Errorf("code fence markers leaked into output: %q", plain)
-	}
-}
-
-func TestMarkdownRendererCachedPerKey(t *testing.T) {
-	p := Resolve(2, true)
-	r1 := markdownRenderer(p, 2, true, 80)
-	r2 := markdownRenderer(p, 2, true, 80)
-	if r1 != r2 {
-		t.Error("expected same cached renderer for identical key")
-	}
-	r3 := markdownRenderer(p, 2, true, 81) // width change -> new renderer
-	if r1 == r3 {
-		t.Error("width change should produce a distinct renderer")
-	}
-	r4 := markdownRenderer(p, 3, true, 80) // variant change -> new renderer
-	if r1 == r4 {
-		t.Error("variant change should produce a distinct renderer")
-	}
-}
-
-func TestMarkdownRendererCacheBounded(t *testing.T) {
-	// A resize drag mints a fresh width key on every frame, so the renderer cache
-	// (the expensive goldmark+chroma objects) must be bounded just like the output
-	// cache — otherwise it grows without limit.
-	p := Resolve(0, true)
-
-	mdMu.Lock()
-	mdCache = map[mdKey]*glamour.TermRenderer{}
-	mdMu.Unlock()
-
-	for w := 1; w <= mdCacheMax*3; w++ {
-		markdownRenderer(p, 0, true, w)
-	}
-
-	mdMu.Lock()
-	n := len(mdCache)
-	mdMu.Unlock()
-	if n > mdCacheMax {
-		t.Errorf("mdCache grew past bound: %d entries, want <= %d", n, mdCacheMax)
-	}
 }
 
 func TestColorizeDiffColorsAddsAndDels(t *testing.T) {

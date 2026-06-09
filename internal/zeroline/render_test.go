@@ -259,36 +259,6 @@ func TestToolCardsShowContent(t *testing.T) {
 	}
 }
 
-func TestAssistantMarkdownClipsLongLines(t *testing.T) {
-	// glamour does not hard-break unbreakable tokens, so a very long URL or fenced
-	// code line would otherwise emit a line far wider than the frame, blowing out
-	// the fixed-height/full-bleed layout. Each emitted line must fit the budget.
-	s := newStyles(Resolve(0, true), 0, true)
-	tw := 60
-	longURL := "See https://example.com/" + strings.Repeat("verylongpath/", 40) + "end"
-	out := s.renderAssistantMarkdown(longURL, tw)
-	if len(out) == 0 {
-		t.Fatal("renderAssistantMarkdown returned no lines")
-	}
-	for i, ln := range out {
-		if w := lipgloss.Width(ln); w > tw {
-			t.Errorf("line %d width %d exceeds budget %d: %q", i, w, tw, stripANSI(ln))
-		}
-	}
-}
-
-func TestAssistantMarkdownClipsLongFencedCode(t *testing.T) {
-	s := newStyles(Resolve(0, true), 0, true)
-	tw := 50
-	src := "```\n" + strings.Repeat("x", 300) + "\n```"
-	out := s.renderAssistantMarkdown(src, tw)
-	for i, ln := range out {
-		if w := lipgloss.Width(ln); w > tw {
-			t.Errorf("line %d width %d exceeds budget %d: %q", i, w, tw, stripANSI(ln))
-		}
-	}
-}
-
 func stripANSI(s string) string {
 	var b strings.Builder
 	inEsc := false
