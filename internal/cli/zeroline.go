@@ -74,7 +74,9 @@ func runZeroline(args []string, stdout io.Writer, stderr io.Writer, deps appDeps
 		} else {
 			frame = zeroline.RenderHome(zeroline.HomeData{
 				Variant: v, Dark: !*light, Width: *width, Height: *height, Header: hdr,
-				Input: "❯ message zero — / commands · @ files · ! bash",
+				Input:     "❯ message zero — / commands · @ files · ! bash",
+				Chips:     zeroline.DefaultChips(),
+				ChipIndex: -1,
 			})
 		}
 		if _, err := fmt.Fprintln(stdout, frame); err != nil {

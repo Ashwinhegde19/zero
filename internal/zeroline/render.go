@@ -70,6 +70,10 @@ type HomeData struct {
 	Header        Header
 	Recent        [][3]string
 	Input         string
+	// Chips are the suggestion chips shown on the empty home (one task per row);
+	// ChipIndex is the highlighted chip (-1 = none).
+	Chips     []string
+	ChipIndex int
 	// Suggestions / SelectedIdx drive the slash-command autocomplete overlay; an
 	// empty slice means no overlay. Picker, when non-nil, is an open selector.
 	Suggestions []Suggestion
@@ -171,7 +175,36 @@ func RenderBoot(variant int, dark bool, frame, w, h int) string {
 
 // ---------------------------------------------------------------- HOME (ZEN)
 
-// RenderHome renders the centered Zen landing surface.
+// DefaultChips returns the suggestion chips shown on the empty home screen.
+func DefaultChips() []string {
+	return []string{
+		"Add a --version flag to the CLI and a test for it",
+		"Why is go vet failing?",
+		"Create hello.txt with 'hi' then cat it",
+	}
+}
+
+// chipRow renders one suggestion chip: an accent ❯ + label padded to width w.
+// The selected chip carries a leading accent ▌ rail (visible without color).
+func (s styles) chipRow(label string, selected bool, w int) string {
+	if w < 8 {
+		w = 8
+	}
+	rail := "  "
+	textStyle := s.dim
+	if selected {
+		rail = s.acc.Render("▌") + " "
+		textStyle = s.fg.Bold(true)
+	}
+	inner := rail + s.acc.Render("❯") + " " + textStyle.Render(clip(label, w-4))
+	if pad := w - lipgloss.Width(inner); pad > 0 {
+		inner += strings.Repeat(" ", pad)
+	}
+	return inner
+}
+
+// RenderHome renders the centered Zen landing surface: the ZERO wordmark, the
+// tagline + a model hint, and the suggestion chips.
 func RenderHome(d HomeData) string {
 	p := Resolve(d.Variant, d.Dark)
 	s := newCanvasStyles(p, d.Variant, d.Dark)
@@ -182,32 +215,27 @@ func RenderHome(d HomeData) string {
 		b.WriteString(s.acc.Render(l) + "\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(s.dim.Render("Own your agent. ") + s.acc2.Render("Any model.") + s.dim.Render(" Zero lock-in.") + "\n\n")
-	b.WriteString(headerStripe(s, d.Header) + "\n\n")
+	b.WriteString(s.mute.Render("a std-lib-first coding agent · bring your own key · no lock-in") + "\n")
+	b.WriteString(s.dim.Render("running ") + s.fg.Render("zero") + s.dim.Render(" against ") + s.fg.Render(orDash(d.Header.Model)) + "\n")
 
-	if len(d.Recent) > 0 {
-		b.WriteString(s.mute.Render("recent sessions") + "\n")
-		for _, r := range d.Recent {
-			title := r[0]
-			pad := 26 - len(title)
-			if pad < 1 {
-				pad = 1
-			}
-			b.WriteString(s.mute.Render("› ") + s.fg.Render(title) + strings.Repeat(" ", pad) +
-				s.dim.Render(r[1]) + "  " + s.mute.Render(r[2]) + "\n")
-		}
+	cw := mini(60, w-8)
+	if len(d.Chips) > 0 {
 		b.WriteString("\n")
+		for i, c := range d.Chips {
+			b.WriteString(s.chipRow(c, i == d.ChipIndex, cw) + "\n")
+		}
 	}
+	b.WriteString("\n")
 
-	box := lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(p.Line).
+	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(p.Line).
 		BorderBackground(p.Bg).Background(p.Bg).
-		Padding(0, 1).Width(mini(58, w-4)).Render(d.Input)
+		Padding(0, 1).Width(cw - 2).Render(d.Input)
 	b.WriteString(box + "\n")
 	homeOverlayCap := len(d.Suggestions) + 1
 	if d.Picker != nil {
 		homeOverlayCap = len(d.Picker.Items) + 1
 	}
-	if overlay := s.overlayRegion(ChatData{Suggestions: d.Suggestions, SelectedIdx: d.SelectedIdx, Picker: d.Picker}, mini(58, w-4), homeOverlayCap); overlay != "" {
+	if overlay := s.overlayRegion(ChatData{Suggestions: d.Suggestions, SelectedIdx: d.SelectedIdx, Picker: d.Picker}, cw, homeOverlayCap); overlay != "" {
 		b.WriteString(overlay + "\n")
 	}
 	b.WriteString("\n")
@@ -216,16 +244,6 @@ func RenderHome(d HomeData) string {
 	content := lipgloss.NewStyle().Align(lipgloss.Center).Background(p.Bg).Render(b.String())
 	return lipgloss.Place(w, maxi(d.Height, 8), lipgloss.Center, lipgloss.Center, content,
 		lipgloss.WithWhitespaceBackground(p.Bg))
-}
-
-func headerStripe(s styles, h Header) string {
-	dirty := ""
-	if h.Dirty {
-		dirty = s.amb.Render("✱")
-	}
-	parts := s.dim.Render(shortPath(h.Cwd)) + s.dim.Render(" · ⎇ ") + s.dim.Render(orDash(h.Branch)) + dirty +
-		s.dim.Render(" · ") + s.fg.Render(orDash(h.Model)) + s.dim.Render(" · ") + s.dim.Render(orDash(h.Provider))
-	return parts
 }
 
 // ------------------------------------------------------------- CHAT (STATUS)

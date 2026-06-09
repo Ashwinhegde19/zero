@@ -28,7 +28,7 @@ func TestRenderHomeAllThemes(t *testing.T) {
 			Header: Header{Cwd: "~/src/zero", Branch: "main", Model: "claude-sonnet-4.5", Provider: "anthropic"},
 			Input:  "❯ message zero",
 		})
-		if !strings.Contains(out, "Own your agent") {
+		if !strings.Contains(stripANSI(out), "std-lib-first") {
 			t.Errorf("theme %d: home missing tagline", v)
 		}
 	}

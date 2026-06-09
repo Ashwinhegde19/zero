@@ -28,7 +28,7 @@ func TestZerolineHomeThenChat(t *testing.T) {
 	m := newZerolineModel()
 
 	// Home is shown until the first turn (showSplash true).
-	if !strings.Contains(m.View(), "Own your agent") {
+	if !strings.Contains(m.View(), "std-lib-first") {
 		t.Fatal("expected Zen home before first turn")
 	}
 

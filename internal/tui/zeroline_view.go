@@ -88,6 +88,8 @@ func (m model) zerolineView() string {
 			Height:      height,
 			Header:      header,
 			Input:       m.input.View(),
+			Chips:       zeroline.DefaultChips(),
+			ChipIndex:   -1, // resting state: chips are suggestions, none pre-selected
 			Suggestions: m.zerolineSuggestions(),
 			SelectedIdx: m.suggestionIdx,
 			Picker:      m.zerolinePicker(),
