@@ -91,8 +91,10 @@ func (tool editFileTool) Run(_ context.Context, args map[string]any) Result {
 		suffix = "s"
 	}
 	summary := fmt.Sprintf("Successfully edited %s (replaced %d occurrence%s).", relativePath, replacedCount, suffix)
-	result := okResult(summary)
+	// Emit the focused change as a unified diff so renderers can show a diff view;
+	// the diff is also clearer confirmation to the model than a prose summary.
+	result := okResult(UnifiedDiff(relativePath, oldString, newString))
 	result.ChangedFiles = []string{relativePath}
-	result.Display = Display{Summary: fmt.Sprintf("Edited %s", relativePath), Kind: "diff"}
+	result.Display = Display{Summary: summary, Kind: "diff"}
 	return result
 }
