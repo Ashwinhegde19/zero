@@ -66,6 +66,15 @@ func defaultNetworkRetryBackoff(attempt int) time.Duration {
 	return d
 }
 
+// annotateUnreachableProvider turns a bare network error (e.g. "TLS handshake
+// timeout") into an actionable message once every retry has failed: it's a
+// connectivity problem reaching the provider, not the model.
+func annotateUnreachableProvider(reason string) string {
+	return strings.TrimSpace(reason) +
+		"\n\nCouldn't reach the provider after retrying — this is a network/connectivity problem, not the model. " +
+		"Check your internet or VPN, or switch to a reachable provider with /provider."
+}
+
 // sleepWithContext waits for d, returning false if the context is cancelled
 // first (so a backoff never outlives a cancelled run).
 func sleepWithContext(ctx context.Context, d time.Duration) bool {

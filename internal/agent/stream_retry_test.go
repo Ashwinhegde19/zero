@@ -2,12 +2,30 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Gitlawb/zero/internal/tools"
 	"github.com/Gitlawb/zero/internal/zeroruntime"
 )
+
+func TestRunAnnotatesUnreachableProviderAfterRetries(t *testing.T) {
+	withInstantBackoff(t)
+	timeout := zeroruntime.StreamEvent{Type: zeroruntime.StreamEventError, Error: `provider stream error: Post "https://ollama.com/v1/chat/completions": net/http: TLS handshake timeout`}
+	provider := &mockProvider{turns: [][]zeroruntime.StreamEvent{{timeout}, {timeout}, {timeout}}}
+
+	_, err := Run(context.Background(), "build", provider, Options{Registry: tools.NewRegistry()})
+	if err == nil {
+		t.Fatal("expected an error once every retry failed")
+	}
+	if !strings.Contains(err.Error(), "/provider") || !strings.Contains(err.Error(), "network/connectivity") {
+		t.Fatalf("error should be an actionable network message, got %q", err.Error())
+	}
+	if len(provider.requests) != 3 { // initial + maxNetworkRetries(2)
+		t.Fatalf("expected 3 attempts, got %d", len(provider.requests))
+	}
+}
 
 func TestIsTransientNetworkError(t *testing.T) {
 	transient := []string{
