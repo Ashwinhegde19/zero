@@ -570,7 +570,10 @@ func (executor Executor) runBuiltArgs(ctx context.Context, built BuildArgsResult
 		exitCode := run.exitCodeOr(-1)
 		summary := SummarizeStream(run.Events, exitCode)
 		executor.recordSpecialistStop(accounting, summary, "error", summary.ExitCode, err, false)
-		return ExecResult{}, err
+		// Carry the child session id even on a post-start failure so a caller (the
+		// swarm launcher -> FailWithSession) can still make the failed member
+		// drillable; the session exists once the child has started.
+		return ExecResult{SessionID: built.SessionID}, err
 	}
 	summary := SummarizeStream(run.Events, run.ExitCode)
 	rolledUp := executor.rollUpSpecialistUsage(accounting, summary)
@@ -613,9 +616,10 @@ func (executor Executor) loadManifest(name string) (Manifest, error) {
 	if !ok {
 		// Corrective error: a model that invents a specialist name (e.g.
 		// "validator-runner", "file-writer") otherwise gets an opaque "not found"
-		// and keeps retrying made-up names. List the real ones so it self-corrects
-		// to a capable specialist instead of spawning doomed sub-agents.
-		return Manifest{}, fmt.Errorf("specialist %q not found. Available: %s. Use 'worker' for tasks that need to run shell commands or edit files; 'explorer'/'code-review' are read-only", name, availableSpecialistList(result))
+		// and keeps retrying made-up names. List the ACTUALLY-registered ones so it
+		// self-corrects — no hardcoded names, since a custom registry may not have
+		// worker/explorer/code-review.
+		return Manifest{}, fmt.Errorf("specialist %q not found. Available: %s. Pick one of these whose tools fit the task, or omit the name to use the default", name, availableSpecialistList(result))
 	}
 	return manifest, nil
 }

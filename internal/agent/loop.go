@@ -210,54 +210,71 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 			}
 		}
 
-		collected := zeroruntime.CollectStreamWithOptions(ctx, stream, zeroruntime.CollectOptions{
-			OnText:          options.OnText,
-			OnReasoning:     options.OnReasoning,
-			OnUsage:         options.OnUsage,
-			OnToolCallStart: options.OnToolCallStart,
-			OnToolCallDelta: options.OnToolCallDelta,
-		})
-		if collected.Error != "" {
-			collectedErr := errors.New(collected.Error)
-			if isImageRejectionError(collectedErr) {
-				result.Messages = copyMessages(messages)
-				return result, fmt.Errorf("model %s rejected the image: %s. The model may not support image input — try switching to a vision-capable model (claude, gpt-4o, gemini)", options.Model, collected.Error)
+		// Wrapped callbacks flag ANY output forwarded this turn, so a stall retry
+		// never re-streams on top of output the user already saw — even across the
+		// reactive-compaction retry below, which overwrites `collected`.
+		forwardedAnything := false
+		mark := func() { forwardedAnything = true }
+		// OnUsage is telemetry, not visible output, so it does NOT mark
+		// forwardedAnything: a provider that emits an early usage event (e.g. prompt
+		// tokens) then stalls with no content must still be safely retried. The gate
+		// only guards against re-streaming output the user actually SAW.
+		forwardingOpts := zeroruntime.CollectOptions{OnUsage: options.OnUsage}
+		if options.OnText != nil {
+			forwardingOpts.OnText = func(s string) { mark(); options.OnText(s) }
+		}
+		if options.OnReasoning != nil {
+			forwardingOpts.OnReasoning = func(s string) { mark(); options.OnReasoning(s) }
+		}
+		if options.OnToolCallStart != nil {
+			forwardingOpts.OnToolCallStart = func(id, name string) { mark(); options.OnToolCallStart(id, name) }
+		}
+		if options.OnToolCallDelta != nil {
+			forwardingOpts.OnToolCallDelta = func(id, fragment string) { mark(); options.OnToolCallDelta(id, fragment) }
+		}
+		// recoverStreamError applies the same non-stall recovery the initial stream
+		// gets to ANY collected error — including one from a reissued (stall-retry)
+		// stream: an image rejection gets the friendly wrapping, and a context limit
+		// gets one compaction + reactive reissue (omitting visible callbacks, since
+		// any pre-error output was already forwarded). It returns the possibly-updated
+		// collected and a non-nil stop error when the run must end now.
+		recoverStreamError := func(collected zeroruntime.CollectedStream) (zeroruntime.CollectedStream, error) {
+			if isImageRejectionError(errors.New(collected.Error)) {
+				return collected, fmt.Errorf("model %s rejected the image: %s. The model may not support image input — try switching to a vision-capable model (claude, gpt-4o, gemini)", options.Model, collected.Error)
 			}
-			// REACTIVE compaction: the streamed error may also be a context
-			// limit (some providers surface it mid-stream). Compact and retry
-			// the same turn once before giving up.
+			// REACTIVE compaction: the streamed error may also be a context limit
+			// (some providers surface it mid-stream). Compact and retry once.
 			if compacted, retried, retryErr := compactor.recover(ctx, provider, messages, request.Tools, collected.Error); retried {
 				messages = compacted
 				if retryErr != nil {
-					result.Messages = copyMessages(messages)
-					return result, retryErr
+					return collected, retryErr
 				}
-				// Reuse the SAME active-mode partition (exposed) from this
-				// turn rather than the bare toolDefinitions: exposed depends on
-				// registry+loaded (not the messages), so they stay valid after compaction.
-				// Routing through an empty-loaded partition here would re-hide every
-				// already-loaded deferred tool.
+				// Reuse the SAME active-mode partition (exposed) from this turn rather
+				// than the bare toolDefinitions: exposed depends on registry+loaded (not
+				// the messages), so it stays valid after compaction.
 				retryRequest := zeroruntime.CompletionRequest{
 					Messages:        copyMessages(messages),
 					Tools:           exposed,
 					ReasoningEffort: options.ReasoningEffort,
 				}
-				// Pre-content reconnect of a mid-stream disconnect: route the connect
-				// through the reconnect helper too (AUDIT-L1).
 				retryStream, retryStreamErr := streamWithReconnect(ctx, provider, retryRequest, reconnectNoticeFor(options))
 				if retryStreamErr != nil {
-					result.Messages = copyMessages(messages)
-					return result, retryStreamErr
+					return collected, retryStreamErr
 				}
-				// Omit OnText on the reactive retry: when the original error
-				// surfaced MID-stream, partial text was already forwarded to the
-				// user. Re-streaming the retried response on top of it would
-				// duplicate output. OnUsage IS kept so token telemetry/budgeting
-				// still counts the successful retry. The retried text is captured
-				// in collected.Text and becomes the turn's assistant message.
 				collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{
 					OnUsage: options.OnUsage,
 				})
+			}
+			return collected, nil
+		}
+
+		collected := zeroruntime.CollectStreamWithOptions(ctx, stream, forwardingOpts)
+		if collected.Error != "" {
+			updated, stop := recoverStreamError(collected)
+			collected = updated
+			if stop != nil {
+				result.Messages = copyMessages(messages)
+				return result, stop
 			}
 		}
 		// Check ctx first: on cancellation helpers.go sets collected.Error to
@@ -274,7 +291,7 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 		// streamed partial text/tool-calls is NOT retried (it would duplicate) and
 		// falls through to the error return below. Capped + exponential backoff.
 		for attempt := 1; attempt <= maxStreamStallRetries &&
-			isStreamTimeoutError(collected.Error) &&
+			isStreamTimeoutError(collected.Error) && !forwardedAnything &&
 			collected.Text == "" && len(collected.ToolCalls) == 0; attempt++ {
 			if err := sleepWithContext(ctx, backoffFor(attempt)); err != nil {
 				result.Messages = copyMessages(messages)
@@ -290,17 +307,22 @@ func Run(ctx context.Context, prompt string, provider Provider, options Options)
 				result.Messages = copyMessages(messages)
 				return result, retryErr
 			}
-			collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, zeroruntime.CollectOptions{
-				OnText:          options.OnText,
-				OnReasoning:     options.OnReasoning,
-				OnUsage:         options.OnUsage,
-				OnToolCallStart: options.OnToolCallStart,
-				OnToolCallDelta: options.OnToolCallDelta,
-			})
+			collected = zeroruntime.CollectStreamWithOptions(ctx, retryStream, forwardingOpts)
 		}
 		if collected.Error != "" {
-			result.Messages = copyMessages(messages)
-			return result, errors.New(collected.Error)
+			// Route a reissued stream's non-stall error through the SAME recovery as
+			// the initial stream (image-rejection wrapping / context-limit compaction)
+			// rather than returning it raw.
+			updated, stop := recoverStreamError(collected)
+			collected = updated
+			if stop != nil {
+				result.Messages = copyMessages(messages)
+				return result, stop
+			}
+			if collected.Error != "" {
+				result.Messages = copyMessages(messages)
+				return result, errors.New(collected.Error)
+			}
 		}
 
 		// Carry the turn's terminal stop reason so a final answer cut off at the

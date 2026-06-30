@@ -155,11 +155,11 @@ func BuildFinalResult(events []streamjson.Event, stderrOutput string, processExi
 
 	var builder strings.Builder
 	if signal := strings.TrimSpace(signalDesc); signal != "" {
-		// The child was terminated by a signal (exit code -1). Surface the cause
-		// instead of an opaque "exit -1". A SIGKILL has several common causes, so
-		// list them rather than asserting OOM — a timeout or user cancellation lands
-		// on this branch too — while still calling out the actionable one.
-		fmt.Fprintf(&builder, "Subagent terminated by a signal (%s) — killed before it finished. Likely causes: the OS out-of-memory killer (common when many sub-agents run in parallel — try fewer), a timeout, or cancellation.\n", signal)
+		// The child was terminated by a signal (exit code -1) rather than exiting.
+		// Surface the signal instead of an opaque "exit -1", and list the common
+		// causes evenhandedly — this branch also covers timeouts and cancellations,
+		// so don't assert OOM.
+		fmt.Fprintf(&builder, "Subagent terminated by a signal (%s) — it was killed before it finished. Common causes: an out-of-memory kill, a timeout, or cancellation; check the signal to tell which. If you were running many sub-agents in parallel, reduce the concurrency.\n", signal)
 	} else {
 		fmt.Fprintf(&builder, "Subagent failed (exit %d)\n", summary.ExitCode)
 	}

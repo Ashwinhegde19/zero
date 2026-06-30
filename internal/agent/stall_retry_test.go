@@ -14,9 +14,10 @@ import (
 // partialText is set it emits that text BEFORE the stall, simulating a stall after
 // partial output (which must NOT be retried — re-issuing would duplicate it).
 type stallProvider struct {
-	calls       int32
-	stallBefore int32
-	partialText string
+	calls         int32
+	stallBefore   int32
+	partialText   string
+	reasoningText string
 }
 
 func (p *stallProvider) StreamCompletion(_ context.Context, _ zeroruntime.CompletionRequest) (<-chan zeroruntime.StreamEvent, error) {
@@ -25,6 +26,9 @@ func (p *stallProvider) StreamCompletion(_ context.Context, _ zeroruntime.Comple
 	if n <= p.stallBefore {
 		if p.partialText != "" {
 			ch <- zeroruntime.StreamEvent{Type: zeroruntime.StreamEventText, Content: p.partialText}
+		}
+		if p.reasoningText != "" {
+			ch <- zeroruntime.StreamEvent{Type: zeroruntime.StreamEventReasoning, Content: p.reasoningText}
 		}
 		ch <- zeroruntime.StreamEvent{
 			Type:  zeroruntime.StreamEventError,
@@ -65,6 +69,24 @@ func TestRunDoesNotRetryStallAfterPartialOutput(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&p.calls); got != 1 {
 		t.Fatalf("partial-then-stall must not retry, got %d calls", got)
+	}
+}
+
+// A stall after only REASONING was forwarded (no text/tool-calls) must NOT be
+// retried: the user already saw the reasoning, so re-issuing with callbacks
+// re-enabled would duplicate it. collected.Text is empty here, so this exercises
+// the turn-level forwarded-output gate specifically, not the text check.
+func TestRunDoesNotRetryStallAfterForwardedReasoning(t *testing.T) {
+	p := &stallProvider{stallBefore: 1, reasoningText: "thinking hard"}
+	_, err := Run(context.Background(), "go", p, Options{
+		Registry:    tools.NewRegistry(),
+		OnReasoning: func(string) {},
+	})
+	if err == nil {
+		t.Fatal("a stall after forwarded reasoning must NOT be retried; want an error")
+	}
+	if got := atomic.LoadInt32(&p.calls); got != 1 {
+		t.Fatalf("reasoning-then-stall must not retry, got %d calls", got)
 	}
 }
 

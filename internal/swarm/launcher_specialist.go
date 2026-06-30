@@ -56,7 +56,10 @@ func NewSpecialistLauncher(executor specialist.Executor) MemberLauncher {
 			MemberAutonomy: true,
 		})
 		if err != nil {
-			return MemberResult{}, err
+			// Preserve the child session id on a post-start failure too (exec.go
+			// returns it on the error path) so lifecycle's FailWithSession can keep
+			// the failed member drillable, not just the StatusError case below.
+			return MemberResult{SessionID: res.SessionID}, err
 		}
 		if res.Result.Status == tools.StatusError {
 			// The child ran but its task FAILED (e.g. non-zero exit / max-turns).

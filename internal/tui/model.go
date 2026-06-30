@@ -3466,6 +3466,13 @@ func (m model) handleSubmit() (tea.Model, tea.Cmd) {
 		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: text})
 		return m, nil
 	case commandTurns:
+		// Changing the budget mid-run would mutate the inherited ZERO_MAX_TURNS env
+		// that sub-agents spawned later in THIS run read, making the run's budget
+		// inconsistent. Require an idle session (the new budget applies next run).
+		if m.pending && strings.TrimSpace(command.text) != "" {
+			m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: "Turns\nFinish or stop the current run before changing the tool-turn budget."})
+			return m, nil
+		}
 		text := ""
 		m, text = m.handleTurnsCommand(command.text)
 		m.transcript = reduceTranscript(m.transcript, transcriptAction{kind: actionAppendSystem, text: text})
