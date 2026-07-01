@@ -407,12 +407,51 @@ func TestTranscriptSelectionReleaseExtendsRangeWithoutMotion(t *testing.T) {
 	}
 }
 
+// A completed selection stays "active" through the async copy-command grace
+// window (transcriptCopiedMsg hasn't landed yet), but the drag itself is over.
+// A genuine hover motion (no button held) arriving in that window must NOT be
+// treated as a drag continuation — it must fall through to hover handling
+// instead of silently moving the selection the user just released.
+func TestTranscriptHoverAfterReleaseDoesNotMoveSelection(t *testing.T) {
+	m := withSidebarContent(mouseTestModel())
+	m.mouseCapture = true
+	m.transcript = appendRow(m.transcript, rowUser, "hello world")
+	textY := firstTranscriptTextMouseY(t, m)
+
+	updated, _ := m.Update(testMouseClick(tea.MouseLeft, 3, textY))
+	m = updated.(model)
+	updated, cmd := m.Update(testMouseRelease(tea.MouseNone, 8, textY))
+	m = updated.(model)
+	if cmd == nil {
+		t.Fatal("sanity check failed: release should return the copy command")
+	}
+	if m.transcriptSelection.dragging {
+		t.Fatal("dragging must be false immediately after release")
+	}
+	before := m.selectedTranscriptText()
+
+	// A hover (no button) moves further along the same line, in the window
+	// before transcriptCopiedMsg has landed (m.transcriptSelection.active is
+	// still true here).
+	updated, _ = m.Update(testMouseMotion(tea.MouseNone, 10, textY))
+	m = updated.(model)
+
+	if got := m.selectedTranscriptText(); got != before {
+		t.Fatalf("a post-release hover changed the selection: got %q, want unchanged %q", got, before)
+	}
+}
+
 // Dragging a selection past the top edge of the visible transcript must
 // auto-scroll toward older content and extend the selection to follow — the
 // classic "drag past the viewport edge keeps scrolling" affordance.
 func TestTranscriptSelectionDragPastTopEdgeAutoScrolls(t *testing.T) {
 	m := mouseTestModel()
 	m.mouseCapture = true
+	// This test exercises the animated glide specifically; reducedMotion
+	// defaults from TTY detection (see defaultReducedMotion), which differs
+	// between a local dev shell and CI's non-TTY runners — set it explicitly
+	// so the test is deterministic regardless of environment.
+	m.reducedMotion = false
 	for i := 0; i < 80; i++ {
 		m.transcript = appendRow(m.transcript, rowUser, "line content")
 	}
@@ -465,6 +504,7 @@ func TestTranscriptSelectionDragPastTopEdgeAutoScrolls(t *testing.T) {
 func TestTranscriptSelectionDragPastBottomEdgeAutoScrolls(t *testing.T) {
 	m := mouseTestModel()
 	m.mouseCapture = true
+	m.reducedMotion = false // deterministic across local/CI TTY-detection differences
 	for i := 0; i < 80; i++ {
 		m.transcript = appendRow(m.transcript, rowUser, "line content")
 	}
@@ -513,6 +553,7 @@ func TestTranscriptSelectionDragPastBottomEdgeAutoScrolls(t *testing.T) {
 func TestTranscriptSelectionEdgeGlideStopsWhenDragReturnsToBody(t *testing.T) {
 	m := mouseTestModel()
 	m.mouseCapture = true
+	m.reducedMotion = false // deterministic across local/CI TTY-detection differences
 	for i := 0; i < 80; i++ {
 		m.transcript = appendRow(m.transcript, rowUser, "line content")
 	}
@@ -554,6 +595,7 @@ func TestTranscriptSelectionEdgeGlideStopsWhenDragReturnsToBody(t *testing.T) {
 func TestTranscriptSelectionEdgeGlideRecoversAfterKeypressInterrupt(t *testing.T) {
 	m := mouseTestModel()
 	m.mouseCapture = true
+	m.reducedMotion = false // deterministic across local/CI TTY-detection differences
 	for i := 0; i < 80; i++ {
 		m.transcript = appendRow(m.transcript, rowUser, "line content")
 	}

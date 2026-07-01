@@ -22,8 +22,20 @@ type transcriptSelectionPoint struct {
 
 type transcriptSelectionState struct {
 	active bool
-	anchor transcriptSelectionPoint
-	cursor transcriptSelectionPoint
+	// dragging is true from press until release — narrower than active, which
+	// stays true through the async copy-command grace window after release (a
+	// non-empty selection isn't reset to {} until transcriptCopiedMsg lands).
+	// mouseMotion gates on THIS, not active, so a genuine hover motion arriving
+	// in that post-release window doesn't get misrouted as a drag continuation.
+	// It also deliberately does NOT require msg's own Button field to be
+	// non-None on each motion event: some terminals don't restate the button on
+	// every motion report during a real drag (see
+	// TestTranscriptSelectionUpdatesOnGenericMotion), so trusting the
+	// per-event button field would break those terminals — dragging tracks the
+	// app's own press/release bracket instead.
+	dragging bool
+	anchor   transcriptSelectionPoint
+	cursor   transcriptSelectionPoint
 }
 
 type transcriptSelectableLine struct {
@@ -1234,7 +1246,7 @@ func (m model) handleTranscriptSelectionMouse(msg tea.MouseMsg) (model, tea.Cmd,
 				m = m.appendSystemNotice(errMsg)
 			}
 			m.chatScrollOffset = 0
-			m.hover = hoverTarget{} // bodyY numbering differs between subchat and the parent transcript
+			m = m.clearHover() // bodyY numbering differs between subchat and the parent transcript
 			return m, nil, true
 		}
 		// A click on a PLAN step row drops a transcript card listing the file
@@ -1264,7 +1276,7 @@ func (m model) handleTranscriptSelectionMouse(msg tea.MouseMsg) (model, tea.Cmd,
 				m = m.appendSystemNotice(errMsg)
 			}
 			m.chatScrollOffset = 0
-			m.hover = hoverTarget{} // bodyY numbering differs between subchat and the parent transcript
+			m = m.clearHover() // bodyY numbering differs between subchat and the parent transcript
 			return m, nil, true
 		}
 		if line.toggle {
@@ -1277,7 +1289,7 @@ func (m model) handleTranscriptSelectionMouse(msg tea.MouseMsg) (model, tea.Cmd,
 		}
 		point := transcriptSelectionPointForMouse(line, mouseX(msg))
 		m.copyStatus = ""
-		m.transcriptSelection = transcriptSelectionState{active: true, anchor: point, cursor: point}
+		m.transcriptSelection = transcriptSelectionState{active: true, dragging: true, anchor: point, cursor: point}
 		// A fresh press always starts a brand-new drag: reset any glide state left
 		// over from a PREVIOUS selection that ended without going through
 		// stopEdgeScroll (e.g. a keypress mid-drag clears transcriptSelection.active
@@ -1288,7 +1300,14 @@ func (m model) handleTranscriptSelectionMouse(msg tea.MouseMsg) (model, tea.Cmd,
 		m = m.stopEdgeScroll()
 		return m, nil, true
 	case mouseMotion(msg):
-		if !m.transcriptSelection.active {
+		// Gate on dragging (the app's own press/release bracket), not active
+		// alone: active stays true through the async copy-command grace window
+		// after release, so without this a genuine hover motion arriving in
+		// that window would be misrouted here and silently move the
+		// just-released selection instead of falling through to hover
+		// handling. Deliberately NOT gated on msg's own Button field — see
+		// transcriptSelectionState.dragging's doc comment.
+		if !m.transcriptSelection.dragging {
 			return m, nil, false
 		}
 		if line, ok := m.transcriptLineAtMouse(msg); ok {
@@ -1329,6 +1348,10 @@ func (m model) handleTranscriptSelectionMouse(msg tea.MouseMsg) (model, tea.Cmd,
 			m.transcriptSelection = transcriptSelectionState{}
 			return m, nil, true
 		}
+		// The drag itself is over even though the selection stays active for
+		// the async copy-command grace window below — see dragging's doc
+		// comment on why mouseMotion must stop treating events as a drag now.
+		m.transcriptSelection.dragging = false
 		return m, copyTranscriptSelectionCmd(text), true
 	default:
 		return m, nil, false

@@ -999,7 +999,7 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Subchat view exits on Esc (returns to main chat).
 			if m.subchat.active {
 				m.chatScrollOffset = m.subchat.exit()
-				m.hover = hoverTarget{} // bodyY numbering differs between subchat and the parent transcript
+				m = m.clearHover() // bodyY numbering differs between subchat and the parent transcript
 				return m, nil
 			}
 			if m.mcpCommandCancel != nil {
@@ -1270,7 +1270,7 @@ func (m model) updateModel(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// ArrowUp exits subchat view (returns to main chat).
 			if m.subchat.active {
 				m.chatScrollOffset = m.subchat.exit()
-				m.hover = hoverTarget{} // bodyY numbering differs between subchat and the parent transcript
+				m = m.clearHover() // bodyY numbering differs between subchat and the parent transcript
 				return m, nil
 			}
 			if m.transcriptDetailed {
