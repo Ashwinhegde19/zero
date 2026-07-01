@@ -212,10 +212,12 @@ func buildTheme(p palette) tuiTheme {
 		lineStrong: fg(p.line2),
 		selection:  lipgloss.NewStyle().Background(col(p.accent)).Foreground(col(p.onAccent)),
 		// A full block (like selection) would be too heavy for something that
-		// repaints on every mouse movement; underline + accent foreground reads as
+		// repaints on every mouse movement; a soft foreground reads as
 		// "interactive" at a glance without competing with real content colors
-		// (e.g. a specialist card's red/green status glyph).
-		hover: fg(p.accent).Underline(true),
+		// (e.g. a specialist card's red/green status glyph). Amber (not the brand
+		// lime accent) — lime read as too glaring for something that repaints
+		// continuously as the cursor moves.
+		hover: fg(p.amber),
 
 		badge: lipgloss.NewStyle().Background(col(p.accent)).Foreground(col(p.onAccent)).Bold(true),
 

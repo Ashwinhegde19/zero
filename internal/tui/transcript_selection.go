@@ -1082,12 +1082,21 @@ func (m model) nearestTranscriptLineAtMouse(msg tea.MouseMsg) (transcriptSelecta
 	if !ok || mouseX(msg) < 0 {
 		return transcriptSelectableLine{}, false
 	}
-	target := window.start + localY
+	return nearestTranscriptSelectableAt(layout, window.start+localY)
+}
+
+// nearestTranscriptSelectableAt returns the selectable line in layout closest to
+// targetBodyY (ties go to whichever is found first) — the fallback core shared by
+// nearestTranscriptLineAtMouse (target derived from a mouse position that may
+// have shifted onto a non-selectable spacer row) and the edge-auto-scroll drag
+// case (target derived directly from the new viewport's top/bottom bound, which
+// has no "mouse position" to speak of at all).
+func nearestTranscriptSelectableAt(layout transcriptBodyLayout, targetBodyY int) (transcriptSelectableLine, bool) {
 	best := transcriptSelectableLine{}
 	bestDist := -1
 	found := false
 	for _, line := range layout.selectable {
-		dist := line.bodyY - target
+		dist := line.bodyY - targetBodyY
 		if dist < 0 {
 			dist = -dist
 		}
@@ -1096,6 +1105,53 @@ func (m model) nearestTranscriptLineAtMouse(msg tea.MouseMsg) (transcriptSelecta
 		}
 	}
 	return best, found
+}
+
+// transcriptEdgeScrollDelta reports the scroll delta to apply when a drag has
+// moved past the top or bottom edge of the visible transcript body while
+// staying within its horizontal span — the classic "drag past the viewport
+// edge auto-scrolls" affordance from browsers/editors. Positive reveals OLDER
+// content (dragged above the top edge, same sign convention as wheel-up);
+// negative reveals NEWER content (dragged below the bottom edge). ok is false
+// when the point isn't a vertical-edge case at all (e.g. off to the side, over
+// the sidebar) — that's not an edge-scroll, just outside the column.
+func (m model) transcriptEdgeScrollDelta(msg tea.MouseMsg) (int, bool) {
+	if m.transcriptHitTestBlocked() {
+		return 0, false
+	}
+	frame, _, _ := m.transcriptHitTestLayout()
+	x, y := mouseX(msg), mouseY(msg)
+	if x < frame.bodyRect.x || x >= frame.bodyRect.x+frame.bodyRect.width {
+		return 0, false
+	}
+	if y < frame.bodyRect.y {
+		return chatWheelScrollLines, true
+	}
+	if y >= frame.bodyRect.y+frame.bodyRect.height {
+		return -chatWheelScrollLines, true
+	}
+	return 0, false
+}
+
+// dragToEdgeScroll scrolls one step toward the edge the drag moved past, then
+// extends the selection cursor to whichever line now sits at THAT edge of the
+// new viewport. It deliberately does NOT try to re-resolve the drag's (still
+// off-screen) physical mouse position — after scrolling, that position is still
+// outside frame.bodyRect (scrolling changes what content occupies a screen row,
+// not the mouse's screen position), so nearestTranscriptLineAtMouse would keep
+// finding nothing. Anchoring to the viewport edge instead is what makes the
+// selection visibly keep pace with the drag while the mouse holds past the edge.
+func (m model) dragToEdgeScroll(delta int, msg tea.MouseMsg) model {
+	m = m.scrollChat(delta)
+	_, window, layout := m.transcriptHitTestLayout()
+	target := window.start
+	if delta < 0 {
+		target = window.start + window.height - 1
+	}
+	if line, ok := nearestTranscriptSelectableAt(layout, target); ok {
+		m.transcriptSelection.cursor = transcriptSelectionPointForMouse(line, mouseX(msg))
+	}
+	return m
 }
 
 func (m model) transcriptViewportStart(body string, width int) (int, int, int) {
@@ -1181,9 +1237,14 @@ func (m model) handleTranscriptSelectionMouse(msg tea.MouseMsg) (model, tea.Cmd,
 		if !m.transcriptSelection.active {
 			return m, nil, false
 		}
-		line, ok := m.transcriptLineAtMouse(msg)
-		if ok {
+		if line, ok := m.transcriptLineAtMouse(msg); ok {
 			m.transcriptSelection.cursor = transcriptSelectionPointForMouse(line, mouseX(msg))
+			return m, nil, true
+		}
+		// The drag moved past the top/bottom edge of the visible transcript:
+		// auto-scroll toward that side and extend the selection to follow.
+		if delta, ok := m.transcriptEdgeScrollDelta(msg); ok {
+			m = m.dragToEdgeScroll(delta, msg)
 		}
 		return m, nil, true
 	case mouseRelease(msg):

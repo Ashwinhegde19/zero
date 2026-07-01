@@ -407,6 +407,80 @@ func TestTranscriptSelectionReleaseExtendsRangeWithoutMotion(t *testing.T) {
 	}
 }
 
+// Dragging a selection past the top edge of the visible transcript must
+// auto-scroll toward older content and extend the selection to follow — the
+// classic "drag past the viewport edge keeps scrolling" affordance.
+func TestTranscriptSelectionDragPastTopEdgeAutoScrolls(t *testing.T) {
+	m := mouseTestModel()
+	m.mouseCapture = true
+	for i := 0; i < 80; i++ {
+		m.transcript = appendRow(m.transcript, rowUser, "line content")
+	}
+	textY := topmostVisibleTranscriptMouseY(t, m)
+
+	updated, _ := m.Update(testMouseClick(tea.MouseLeft, 0, textY))
+	m = updated.(model)
+	if !m.transcriptSelection.active {
+		t.Fatal("selection should be active after a left click on transcript text")
+	}
+	cursorBefore := m.transcriptSelection.cursor.bodyY
+	scrollBefore := m.chatScrollOffset
+
+	frame, _, _ := m.transcriptHitTestLayout()
+	aboveBody := frame.bodyRect.y - 1 // one row above the visible transcript body
+
+	// A left-button drag (not a hover) moved past the top edge.
+	updated, _ = m.Update(testMouseMotion(tea.MouseLeft, 0, aboveBody))
+	m = updated.(model)
+
+	if m.chatScrollOffset == scrollBefore {
+		t.Fatal("dragging past the top edge should auto-scroll toward older content")
+	}
+	if !m.transcriptSelection.active {
+		t.Fatal("selection must survive an edge auto-scroll, not be cleared")
+	}
+	if m.transcriptSelection.cursor.bodyY >= cursorBefore {
+		t.Fatalf("selection cursor bodyY = %d, want < %d (it must extend upward to follow the drag)", m.transcriptSelection.cursor.bodyY, cursorBefore)
+	}
+}
+
+// Symmetric to the top-edge case: dragging past the BOTTOM edge scrolls toward
+// newer content. Requires scrolling up first so there's somewhere to scroll back
+// down to (chatScrollOffset=0 already sits at the bottom).
+func TestTranscriptSelectionDragPastBottomEdgeAutoScrolls(t *testing.T) {
+	m := mouseTestModel()
+	m.mouseCapture = true
+	for i := 0; i < 80; i++ {
+		m.transcript = appendRow(m.transcript, rowUser, "line content")
+	}
+	m.chatScrollOffset = chatWheelScrollLines * 3 // scrolled up, away from the bottom
+
+	textY := topmostVisibleTranscriptMouseY(t, m)
+	updated, _ := m.Update(testMouseClick(tea.MouseLeft, 0, textY))
+	m = updated.(model)
+	if !m.transcriptSelection.active {
+		t.Fatal("selection should be active after a left click on transcript text")
+	}
+	cursorBefore := m.transcriptSelection.cursor.bodyY
+	scrollBefore := m.chatScrollOffset
+
+	frame, _, _ := m.transcriptHitTestLayout()
+	belowBody := frame.bodyRect.y + frame.bodyRect.height // one row below the visible transcript body
+
+	updated, _ = m.Update(testMouseMotion(tea.MouseLeft, 0, belowBody))
+	m = updated.(model)
+
+	if m.chatScrollOffset >= scrollBefore {
+		t.Fatal("dragging past the bottom edge should auto-scroll toward newer content (offset decreases)")
+	}
+	if !m.transcriptSelection.active {
+		t.Fatal("selection must survive an edge auto-scroll, not be cleared")
+	}
+	if m.transcriptSelection.cursor.bodyY <= cursorBefore {
+		t.Fatalf("selection cursor bodyY = %d, want > %d (it must extend downward to follow the drag)", m.transcriptSelection.cursor.bodyY, cursorBefore)
+	}
+}
+
 func TestTranscriptSelectionClearsAfterCopy(t *testing.T) {
 	m := mouseTestModel()
 	m.transcriptSelection = transcriptSelectionState{active: true}
