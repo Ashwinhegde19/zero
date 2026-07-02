@@ -127,9 +127,28 @@ jobs:
         with:
           node-version: 24
 
-      # OIDC trusted publishing needs npm >= 11.5.1; runner images can lag.
-      - name: Update npm for trusted publishing
-        run: npm install -g npm@latest && npm --version
+      # OIDC trusted publishing needs npm >= 11.5.1. Use the npm bundled with
+      # the pinned Node toolchain (Node 24 ships >= 11.5.1) rather than pulling
+      # npm@latest from the registry inside the publish path — an unpinned
+      # install there would be avoidable supply-chain exposure. Fail fast if a
+      # future runner/toolchain change ever regresses the bundled npm.
+      - name: Check npm supports trusted publishing
+        run: |
+          npm --version | node -e '
+            const version = require("fs").readFileSync(0, "utf8").trim();
+            const [major, minor, patch] = version.split(".").map(Number);
+            const ok =
+              major > 11 ||
+              (major === 11 && (minor > 5 || (minor === 5 && patch >= 1)));
+            if (!ok) {
+              console.error(
+                `::error::bundled npm ${version} is too old for OIDC trusted ` +
+                  `publishing (needs >= 11.5.1) — bump node-version in this job.`,
+              );
+              process.exit(1);
+            }
+            console.log(`npm ${version} supports trusted publishing.`);
+          '
 
       # Probe the exact URLs postinstall will build (internal/release/release.go
       # asset-name scheme) as an anonymous client. This also blocks publishing
