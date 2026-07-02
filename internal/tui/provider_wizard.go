@@ -463,6 +463,17 @@ func (wizard *providerWizardState) advance() {
 		if wizard.oauthMode {
 			return
 		}
+		// Resolve the selected provider's index in the full list before clearing
+		// the search — selectedProvider is an index into the filtered slice, and
+		// clearing the search swaps to the full list.
+		if selected := wizard.currentProvider(); selected.ID != "" {
+			for i, p := range wizard.providers {
+				if p.ID == selected.ID {
+					wizard.selectedProvider = i
+					break
+				}
+			}
+		}
 		wizard.providerSearch = ""
 		wizard.refreshModels()
 		wizard.err = ""
@@ -1348,7 +1359,7 @@ func (wizard *providerWizardState) renderProviderStep(width int) []string {
 
 func (wizard *providerWizardState) renderProviderSearch(width int) string {
 	query := strings.TrimSpace(wizard.providerSearch)
-	return providerWizardInputLine("search > ", query, "provider name...", width)
+	return providerWizardInputLine("search > ", query, "provider name, id, or alias...", width)
 }
 
 // providerWizardOAuthErrHint returns a provider-specific next step for a failed
