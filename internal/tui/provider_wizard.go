@@ -463,6 +463,9 @@ func (wizard *providerWizardState) advance() {
 		if wizard.oauthMode {
 			return
 		}
+		if len(wizard.filteredProviders()) == 0 {
+			return
+		}
 		// Resolve the selected provider's index in the full list before clearing
 		// the search — selectedProvider is an index into the filtered slice, and
 		// clearing the search swaps to the full list.
