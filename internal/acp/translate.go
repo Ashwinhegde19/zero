@@ -200,6 +200,10 @@ func (n *notifier) thought(delta string) {
 	}
 }
 
+func (n *notifier) warning(message string) {
+	n.thought(message)
+}
+
 func (n *notifier) toolCall(call agent.ToolCall)       { n.send(toolCallStart(call)) }
 func (n *notifier) toolResult(result agent.ToolResult) { n.send(toolCallResult(result)) }
 

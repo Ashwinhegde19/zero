@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -63,9 +65,10 @@ func testDeps(t *testing.T) Deps {
 // clientHarness wires a client Conn to an Agent over in-memory pipes and collects
 // session/update text chunks.
 type clientHarness struct {
-	client  *Conn
-	updates chan string
-	stop    func()
+	client   *Conn
+	updates  chan string
+	thoughts chan string
+	stop     func()
 }
 
 func newHarness(t *testing.T, deps Deps) *clientHarness {
@@ -76,7 +79,7 @@ func newHarness(t *testing.T, deps Deps) *clientHarness {
 	client := NewConn(br, bw)
 	a := NewAgent(agentConn, deps)
 
-	h := &clientHarness{client: client, updates: make(chan string, 128)}
+	h := &clientHarness{client: client, updates: make(chan string, 128), thoughts: make(chan string, 128)}
 	client.HandleNotify(MethodSessionUpdate, func(_ context.Context, params json.RawMessage) {
 		var probe struct {
 			Update struct {
@@ -89,8 +92,11 @@ func newHarness(t *testing.T, deps Deps) *clientHarness {
 		if json.Unmarshal(params, &probe) != nil {
 			return
 		}
-		if probe.Update.SessionUpdate == UpdateAgentMessageChunk {
+		switch probe.Update.SessionUpdate {
+		case UpdateAgentMessageChunk:
 			h.updates <- probe.Update.Content.Text
+		case UpdateAgentThoughtChunk:
+			h.thoughts <- probe.Update.Content.Text
 		}
 	})
 
@@ -151,6 +157,72 @@ func TestACPEndToEndPrompt(t *testing.T) {
 	// The streamed agent_message_chunk(s) should carry the assistant text.
 	if got := drainText(t, h.updates); !strings.Contains(got, "Hello from ZERO") {
 		t.Fatalf("streamed text = %q, want it to contain the assistant message", got)
+	}
+}
+
+func TestACPPromptWarnsWhenPersistenceFails(t *testing.T) {
+	deps := testDeps(t)
+	h := newHarness(t, deps)
+	defer h.stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var newRes NewSessionResult
+	if err := h.client.Call(ctx, MethodSessionNew, NewSessionParams{Cwd: t.TempDir(), McpServers: []McpServer{}}, &newRes); err != nil {
+		t.Fatalf("session/new: %v", err)
+	}
+	eventsPath := filepath.Join(deps.Store.RootDir, newRes.SessionID, sessions.EventsFile)
+	if err := os.Remove(eventsPath); err != nil {
+		t.Fatalf("remove events file: %v", err)
+	}
+	if err := os.Mkdir(eventsPath, 0o700); err != nil {
+		t.Fatalf("replace events file with directory: %v", err)
+	}
+
+	var promptRes PromptResult
+	if err := h.client.Call(ctx, MethodSessionPrompt, PromptParams{
+		SessionID: newRes.SessionID,
+		Prompt:    []ContentBlock{TextBlock("hi")},
+	}, &promptRes); err != nil {
+		t.Fatalf("session/prompt should continue after persistence failure: %v", err)
+	}
+	if promptRes.StopReason != StopEndTurn {
+		t.Fatalf("stopReason = %q, want %q", promptRes.StopReason, StopEndTurn)
+	}
+	if got := drainContains(t, h.updates, "Hello from ZERO"); got == "" {
+		t.Fatal("expected assistant response to stream despite persistence failure")
+	}
+	if got := drainContains(t, h.thoughts, "ACP session history was not fully persisted"); got == "" {
+		t.Fatal("expected persistence warning thought chunk")
+	}
+}
+
+func TestACPLoadWarnsWhenHistoryReadFails(t *testing.T) {
+	deps := testDeps(t)
+	meta, err := deps.Store.Create(sessions.CreateInput{Title: "corrupt", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	eventsPath := filepath.Join(deps.Store.RootDir, meta.SessionID, sessions.EventsFile)
+	if err := os.WriteFile(eventsPath, []byte("{not-json}\n"), 0o600); err != nil {
+		t.Fatalf("corrupt events file: %v", err)
+	}
+
+	h := newHarness(t, deps)
+	defer h.stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var loadRes LoadSessionResult
+	if err := h.client.Call(ctx, MethodSessionLoad, LoadSessionParams{SessionID: meta.SessionID}, &loadRes); err != nil {
+		t.Fatalf("session/load should continue after history read failure: %v", err)
+	}
+	if loadRes.Modes == nil || loadRes.Modes.CurrentModeID != string(agent.PermissionModeAuto) {
+		t.Fatalf("expected auto mode, got %+v", loadRes.Modes)
+	}
+	if got := drainContains(t, h.thoughts, "ACP session history could not be loaded"); got == "" {
+		t.Fatal("expected load warning thought chunk")
 	}
 }
 
@@ -245,13 +317,18 @@ func TestACPRejectsInvalidCwd(t *testing.T) {
 // drainText collects streamed chunks for a short window and concatenates them.
 func drainText(t *testing.T, ch <-chan string) string {
 	t.Helper()
+	return drainContains(t, ch, "Hello from ZERO")
+}
+
+func drainContains(t *testing.T, ch <-chan string, needle string) string {
+	t.Helper()
 	var b strings.Builder
 	deadline := time.After(2 * time.Second)
 	for {
 		select {
 		case s := <-ch:
 			b.WriteString(s)
-			if strings.Contains(b.String(), "Hello from ZERO") {
+			if strings.Contains(b.String(), needle) {
 				return b.String()
 			}
 		case <-deadline:

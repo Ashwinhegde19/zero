@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -159,8 +160,11 @@ func (a *Agent) handleSessionLoad(_ context.Context, params json.RawMessage) (an
 	// Load history BEFORE publishing the session so no concurrent prompt observes
 	// a half-initialized session (registerSession sets history under the lock and
 	// reuses an already-live session rather than orphaning its in-flight turn).
-	history := a.loadHistory(meta.SessionID)
+	history, historyErr := a.loadHistory(meta.SessionID)
 	sess := a.registerSession(meta.SessionID, root, history)
+	if historyErr != nil {
+		(&notifier{conn: a.conn, sessionID: sess.id}).warning("Warning: ACP session history could not be loaded: " + historyErr.Error())
+	}
 	return LoadSessionResult{
 		Modes: a.modeState(sess),
 	}, nil
@@ -253,7 +257,9 @@ func (a *Agent) runTurn(ctx context.Context, sess *acpSession, userText string, 
 	if stopErr != nil {
 		return "", RPCError(codeInternalError, stopErr.Error())
 	}
-	a.persistTurn(sess, userText, result.FinalAnswer)
+	if err := a.persistTurn(sess, userText, result.FinalAnswer); err != nil {
+		note.warning("Warning: ACP session history was not fully persisted: " + err.Error())
+	}
 	return reason, nil
 }
 
@@ -386,29 +392,35 @@ func (a *Agent) modeState(s *acpSession) *SessionModeState {
 
 // ---- persistence + continuity ----
 
-func (a *Agent) persistTurn(sess *acpSession, user, assistant string) {
+func (a *Agent) persistTurn(sess *acpSession, user, assistant string) error {
+	var persistErr error
 	if a.deps.Store != nil {
-		_, _ = a.deps.Store.AppendEvent(sess.id, sessions.AppendEventInput{
+		if _, err := a.deps.Store.AppendEvent(sess.id, sessions.AppendEventInput{
 			Type:    sessions.EventMessage,
 			Payload: map[string]any{"role": "user", "content": user},
-		})
+		}); err != nil {
+			persistErr = errors.Join(persistErr, fmt.Errorf("user message: %w", err))
+		}
 		if assistant != "" {
-			_, _ = a.deps.Store.AppendEvent(sess.id, sessions.AppendEventInput{
+			if _, err := a.deps.Store.AppendEvent(sess.id, sessions.AppendEventInput{
 				Type:    sessions.EventMessage,
 				Payload: map[string]any{"role": "assistant", "content": assistant},
-			})
+			}); err != nil {
+				persistErr = errors.Join(persistErr, fmt.Errorf("assistant message: %w", err))
+			}
 		}
 	}
 	sess.appendHistory(turnRecord{user: user, assistant: assistant})
+	return persistErr
 }
 
-func (a *Agent) loadHistory(sessionID string) []turnRecord {
+func (a *Agent) loadHistory(sessionID string) ([]turnRecord, error) {
 	if a.deps.Store == nil {
-		return nil
+		return nil, nil
 	}
 	events, err := a.deps.Store.ReadEvents(sessionID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var records []turnRecord
 	var pendingUser string
@@ -444,7 +456,7 @@ func (a *Agent) loadHistory(sessionID string) []turnRecord {
 	if havePending {
 		records = append(records, turnRecord{user: pendingUser})
 	}
-	return records
+	return records, nil
 }
 
 // buildPrompt prepends prior conversation as context, since agent.Run drives a
