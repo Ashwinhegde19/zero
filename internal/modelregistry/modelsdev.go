@@ -246,7 +246,7 @@ func RefreshModelsDevCache(ctx context.Context) error {
 		return err
 	}
 	if len(data) > modelsDevFetchLimit {
-		return fmt.Errorf("modelregistry: models.dev response exceeds %d byte limit", modelsDevFetchLimit)
+		return fmt.Errorf("modelregistry: models.dev response is %d bytes, exceeds %d byte limit", len(data), modelsDevFetchLimit)
 	}
 	// Validate before persisting: a bad body must never clobber a good cache.
 	if _, err := parseModelsDev(data); err != nil {
